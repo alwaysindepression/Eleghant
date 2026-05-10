@@ -40,7 +40,7 @@ DB_VERSION = 2
 MAX_BULK_ADD = 1000
 
 AGREEMENT_URL = "https://telegra.ph/Pravila-EleghantShopBot-03-26"              
-SUPPORT_URL = "https://t.me/EleghantSup2Bot"
+SUPPORT_URL = "https://t.me/EleghantSup3_Bot"
 
 # --- КАСТОМНЫЕ ЭМОДЗИ (ПРЕМИУМ) ---
 class CustomEmoji:
@@ -415,7 +415,10 @@ async def update_catalog_descriptions():
         "YOTA 1960+": '📱 <b>YOTA 1960+</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nYOTA - без TOTP, ВП, отчеканный на ФССП',
         "T2 SMENA MIKS 1960+": '📱 <b>T2 SMENA MIKS 1960+</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nT2 - без TOTP, ВП, отчеканный на ФССП',
         "Чистые ГУ 1960-1969": '🇷🇺 <b>Чистые ГУ 1960-1969</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nНовый, чистый аккаунт ГУ. Официально подтверждён с помощью панели МФЦ.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
-        "ГУ под ГК 1960-1969": '😂 <b>ГУ под ГК 1960-1969</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nАккаунт ГУ предназначенный только для подписей. Оформить банки/верифы на него не выйдет.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.'
+        "ГУ под ГК 1960-1969": '😂 <b>ГУ под ГК 1960-1969</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nАккаунт ГУ предназначенный только для подписей. Оформить банки/верифы на него не выйдет.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
+        # ── НОВЫЕ КАТЕГОРИИ 1980-2006 ──────────────────────────────────────────
+        "Чистые ГУ 1980-2006": '🇷🇺 <b>Чистые ГУ 1980-2006</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nНовый, чистый аккаунт ГУ. Официально подтверждён с помощью панели МФЦ.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
+        "ГУ под ГК 1980-2006": '😂 <b>ГУ под ГК 1980-2006</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nАккаунт ГУ предназначенный только для подписей. Оформить банки/верифы на него не выйдет.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
     }
     
     prices = {
@@ -425,7 +428,10 @@ async def update_catalog_descriptions():
         "YOTA 1960+": 3.5,
         "T2 SMENA MIKS 1960+": 4.0,
         "Чистые ГУ 1960-1969": 25.0,
-        "ГУ под ГК 1960-1969": 18.0
+        "ГУ под ГК 1960-1969": 18.0,
+        # ── НОВЫЕ КАТЕГОРИИ 1980-2006 ──────────────────────────────────────────
+        "Чистые ГУ 1980-2006": 25.0,
+        "ГУ под ГК 1980-2006": 18.0,
     }
     
     cat_groups = {
@@ -435,7 +441,10 @@ async def update_catalog_descriptions():
         "YOTA 1960+": "l0gu_1970",
         "T2 SMENA MIKS 1960+": "l0gu_1970",
         "Чистые ГУ 1960-1969": "gy_1970",
-        "ГУ под ГК 1960-1969": "gy_1970"
+        "ГУ под ГК 1960-1969": "gy_1970",
+        # ── НОВЫЕ КАТЕГОРИИ 1980-2006 ──────────────────────────────────────────
+        "Чистые ГУ 1980-2006": "gy_1970",
+        "ГУ под ГК 1980-2006": "gy_1970",
     }
     
     for name, desc in descriptions.items():
@@ -444,14 +453,12 @@ async def update_catalog_descriptions():
         cat_group = cat_groups.get(name, "")
         
         if existing:
-            # Обновляем существующую категорию
             await execute_query(
                 "UPDATE categories SET desc = ?, price = ?, cat_group = ? WHERE name = ?",
                 (desc, price, cat_group, name), commit=True
             )
             logger.info(f"Updated category: {name}")
         else:
-            # Создаём новую категорию
             await execute_query(
                 "INSERT INTO categories (name, desc, price, cat_group) VALUES (?, ?, ?, ?)",
                 (name, desc, price, cat_group), commit=True
@@ -700,7 +707,8 @@ async def show_categories_group(call: types.CallbackQuery, group_key: str):
         emoji_ids = [CustomEmoji.MTS, CustomEmoji.MEGAFON, CustomEmoji.BEELINE, CustomEmoji.YOTA, CustomEmoji.T2]
     elif group_key == "gy":
         cat_group = "gy_1970"
-        emoji_ids = [CustomEmoji.GY, CustomEmoji.GY_EMOJI]
+        # 4 категории: Чистые 1960, ГУ под ГК 1960, Чистые 1980, ГУ под ГК 1980
+        emoji_ids = [CustomEmoji.GY, CustomEmoji.GY_EMOJI, CustomEmoji.GY, CustomEmoji.GY_EMOJI]
     else:
         await call.answer("Неизвестная группа")
         return
@@ -817,7 +825,6 @@ async def view_cat_cb(call: types.CallbackQuery):
     stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cid,))
     stock_count = stock[0] if stock else 0
     
-    # Формируем текст с использованием описания из БД
     text = f"{cat_desc}\n\n<tg-emoji emoji-id=\"{CustomEmoji.MONEY}\">💵</tg-emoji> Цена: <b>{cat_price} USDT/шт</b>\n<tg-emoji emoji-id=\"{CustomEmoji.WARNING}\">❗️</tg-emoji> Наличие: {stock_count} шт."
     
     kb = InlineKeyboardBuilder()
@@ -885,14 +892,12 @@ async def preorder_quantity_msg(message: types.Message, state: FSMContext):
     price = data['preorder_price']
     total = round(price * qty, 2)
     
-    # Сохраняем предзаказ в БД
     await execute_query(
         "INSERT INTO preorders (user_id, cat_id, quantity, total, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
         (message.from_user.id, cat_id, qty, total, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "pending"),
         commit=True
     )
     
-    # Получаем ID созданного предзаказа
     preorder = await fetchone("SELECT id FROM preorders WHERE user_id = ? AND cat_id = ? AND created_at = ? ORDER BY id DESC LIMIT 1",
                               (message.from_user.id, cat_id, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
     preorder_id = preorder[0] if preorder else None
@@ -953,7 +958,6 @@ async def auto_check_preorder_payment(invoice_id: int, user_id: int, cat_id: int
             if res.get('ok') and res['result'].get('items'):
                 inv = res['result']['items'][0]
                 if inv['status'] == 'paid':
-                    # Обновляем статус предзаказа на "paid" (оплачен)
                     if preorder_id:
                         await execute_query(
                             "UPDATE preorders SET status = 'paid', paid_at = ? WHERE id = ?",
@@ -1024,10 +1028,11 @@ async def cancel_preorder_cb(call: types.CallbackQuery, state: FSMContext):
     await call.message.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Предзаказ отменен', parse_mode="HTML")
     await call.answer()
 
+# ── BUG FIX: split("_")[3] — callback "preorder_from_cat_N".split("_") = ['preorder','from','cat','N']
 @dp.callback_query(F.data.startswith("preorder_from_cat_"))
 async def preorder_from_cat_cb(call: types.CallbackQuery, state: FSMContext):
     try:
-        cid = int(call.data.split("_")[2])
+        cid = int(call.data.split("_")[3])
     except (IndexError, ValueError):
         await call.answer("❌ Ошибка", show_alert=True)
         return
@@ -1104,7 +1109,6 @@ async def quantity_msg(message: types.Message, state: FSMContext):
     total = round(price * qty, 2)
     balance = await get_balance(message.from_user.id)
     
-    # Проверяем наличие активного промокода
     discount = 0
     if hasattr(bot, 'user_promos') and message.from_user.id in bot.user_promos:
         promo_data = bot.user_promos[message.from_user.id]
@@ -1234,11 +1238,9 @@ async def show_profile_with_image(user_id: int, target_message: types.Message):
     total_bought = await fetchone("SELECT total FROM users WHERE id = ?", (user_id,))
     balance = await get_balance(user_id)
     
-    # Считаем активные предзаказы (оплаченные, но не выданные)
     active_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE user_id = ? AND status = 'paid'", (user_id,))
     active_preorders_count = active_preorders[0] if active_preorders else 0
     
-    # Считаем предзаказы ожидающие оплаты
     pending_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE user_id = ? AND status = 'pending'", (user_id,))
     pending_preorders_count = pending_preorders[0] if pending_preorders else 0
     
@@ -1277,7 +1279,6 @@ async def profile_preorders_cb(call: types.CallbackQuery):
         cat = await fetchone("SELECT name FROM categories WHERE id = ?", (cat_id,))
         cat_name = cat[0] if cat else "Неизвестно"
         
-        # Правильное отображение статуса
         if status == "pending":
             status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji>'
             status_text = "Ожидает оплаты"
@@ -1913,6 +1914,7 @@ async def admin_change_price_start(call: types.CallbackQuery, state: FSMContext)
     await call.message.edit_text("💰 Выберите категорию для изменения цены:", reply_markup=kb.as_markup())
     await call.answer()
 
+# ── BUG FIX: split("_")[3] — "change_price_cat_N".split("_") = ['change','price','cat','N']
 @dp.callback_query(F.data.startswith("change_price_cat_"))
 async def admin_change_price_cat(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
@@ -1955,7 +1957,6 @@ async def admin_preorders_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
     
-    # Получаем все предзаказы с информацией о пользователях
     preorders = await fetchall("""
         SELECT p.id, p.user_id, u.username, c.name, p.quantity, p.total, p.created_at, p.paid_at, p.status 
         FROM preorders p 
@@ -1975,7 +1976,6 @@ async def admin_preorders_cb(call: types.CallbackQuery):
         await call.message.edit_text("📦 Нет предзаказов.")
         return
     
-    # Разделяем на группы
     paid_preorders = []
     pending_preorders = []
     other_preorders = []
@@ -2171,7 +2171,6 @@ async def cmd_add_stock(message: types.Message):
                         f"<i>Для завершения введите /done</i>",
                         parse_mode="HTML")
     
-    # Сохраняем состояние для добавления товаров
     if not hasattr(bot, 'pending_stock_add'):
         bot.pending_stock_add = {}
     
@@ -2233,7 +2232,6 @@ async def handle_add_stock_items(message: types.Message):
     data = bot.pending_stock_add[message.from_user.id]
     items = data['items']
     total_count = data['total_count']
-    current_index = len(items)
     
     items.append(message.text)
     
@@ -2255,7 +2253,6 @@ async def show_user_stats(message: types.Message):
         return
     
     try:
-        # Статистика из БД
         total_users = await fetchone("SELECT COUNT(*) FROM users WHERE accepted = 1")
         total_purchases = await fetchone("SELECT SUM(total) FROM users")
         total_balance = await fetchone("SELECT SUM(balance) FROM balances")
@@ -2296,13 +2293,11 @@ async def show_user_info(message: types.Message):
         return
     
     try:
-        # Информация из БД
         user_data = await fetchone("SELECT id, username, total, referrer_id FROM users WHERE id = ?", (target_user_id,))
         balance = await get_balance(target_user_id)
         
         preorders = await fetchall("SELECT id, cat_id, quantity, total, status, created_at FROM preorders WHERE user_id = ? ORDER BY created_at DESC", (target_user_id,))
         
-        # Информация из Telegram
         try:
             user = await bot.get_chat(target_user_id)
             telegram_info = f"""
@@ -2427,7 +2422,7 @@ async def main():
     
     try:
         await init_db()
-        await setup_catalog()  # Это обновит описания существующих категорий
+        await setup_catalog()
         asyncio.create_task(cleanup_old_payments())
         
         if not hasattr(bot, 'user_promos'):
