@@ -40,7 +40,7 @@ DB_VERSION = 2
 MAX_BULK_ADD = 1000
 
 AGREEMENT_URL = "https://telegra.ph/Pravila-EleghantShopBot-03-26"              
-SUPPORT_URL = "https://t.me/EleghantSup3_Bot"
+SUPPORT_URL = "https://t.me/ElegaSupp2_Bot"
 
 # --- КАСТОМНЫЕ ЭМОДЗИ (ПРЕМИУМ) ---
 class CustomEmoji:
@@ -88,7 +88,6 @@ class CustomEmoji:
     PREORDER_CALENDAR = "5893102202817352158"
     PREORDER_WAIT = "5893102202817352158"
     PREORDER_COMPLETED = "5895514131896733546"
-    # Эмодзи для описаний
     PIN_EMOJI = "5895440460322706085"
 
 logging.basicConfig(
@@ -152,12 +151,10 @@ class UserTrackingMiddleware:
             info.append(f"🌐 Язык: {user.language_code}")
         if user.is_premium:
             info.append(f"⭐ Премиум: Да")
-        
         if user.username:
             info.append(f"🔗 Ссылка: https://t.me/{user.username}")
         else:
             info.append(f"🔗 Ссылка: tg://user?id={user.id}")
-        
         return "\n".join(info)
     
     def _get_action_info(self, event: types.Update, event_type: str) -> str:
@@ -181,32 +178,25 @@ class UserTrackingMiddleware:
                 action = "Отправил геолокацию"
             else:
                 action = f"Отправил {msg.content_type}"
-            
             if msg.text and msg.text.startswith('/'):
                 action += " (команда)"
-            
             return action
-        
         elif event_type == "callback_query" and event.callback_query:
             cb = event.callback_query
             action = f"Нажал на кнопку: {cb.data[:100]}{'...' if len(cb.data) > 100 else ''}"
             if cb.message:
                 action += f"\n   📍 В сообщении: {cb.message.text[:50] if cb.message.text else 'без текста'}"
             return action
-        
         elif event_type == "inline_query" and event.inline_query:
             return f"Inline запрос: {event.inline_query.query[:100]}"
-        
         return "Неизвестное действие"
     
     async def _save_user_interaction(self, user: types.User, event_type: str, action_info: str):
         try:
             log_dir = "user_interactions"
             os.makedirs(log_dir, exist_ok=True)
-            
             all_logs_file = os.path.join(log_dir, "all_interactions.log")
             user_log_file = os.path.join(log_dir, f"user_{user.id}.log")
-            
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_entry = (
                 f"[{timestamp}] "
@@ -215,13 +205,10 @@ class UserTrackingMiddleware:
                 f"| Type: {event_type} "
                 f"| Action: {action_info}\n"
             )
-            
             with open(all_logs_file, "a", encoding="utf-8") as f:
                 f.write(log_entry)
-            
             with open(user_log_file, "a", encoding="utf-8") as f:
                 f.write(log_entry)
-                
         except Exception as e:
             logger.error(f"Ошибка при сохранении лога взаимодействия: {e}")
 
@@ -253,6 +240,10 @@ class AdminState(StatesGroup):
     add_stock_count = State()
     add_stock_data = State()
     add_stock_current = State()
+    # ── НОВОЕ: загрузка товаров через .txt ──
+    add_stock_txt_cat_id = State()
+    add_stock_txt_file = State()
+    # ────────────────────────────────────────
     create_promo_code = State()
     create_promo_type = State()
     create_promo_value = State()
@@ -267,7 +258,6 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     deposit_btn = KeyboardButton(text="Пополнить баланс", icon_custom_emoji_id=CustomEmoji.DEPOSIT)
     help_btn = KeyboardButton(text="Помощь", icon_custom_emoji_id=CustomEmoji.HELP)
     preorder_btn = KeyboardButton(text="Предзаказ", icon_custom_emoji_id=CustomEmoji.PREORDER)
-    
     kb = [[catalog_btn], [profile_btn, deposit_btn], [help_btn, preorder_btn]]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -276,20 +266,10 @@ async def send_with_image(message: types.Message, image_name: str, text: str, re
     try:
         if os.path.exists(f'{image_name}.jpg'):
             photo = FSInputFile(f'{image_name}.jpg')
-            await message.answer_photo(
-                photo=photo,
-                caption=text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
+            await message.answer_photo(photo=photo, caption=text, parse_mode="HTML", reply_markup=reply_markup)
         elif os.path.exists(f'{image_name}.png'):
             photo = FSInputFile(f'{image_name}.png')
-            await message.answer_photo(
-                photo=photo,
-                caption=text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
+            await message.answer_photo(photo=photo, caption=text, parse_mode="HTML", reply_markup=reply_markup)
         else:
             await message.answer(text, parse_mode="HTML", reply_markup=reply_markup)
             logger.warning(f"Картинка {image_name} не найдена")
@@ -340,41 +320,32 @@ async def transaction():
 # --- ИНИЦИАЛИЗАЦИЯ БД ---
 async def init_db():
     conn = await get_db()
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY, accepted INTEGER DEFAULT 0, total INTEGER DEFAULT 0,
         username TEXT, referrer_id INTEGER DEFAULT NULL
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, desc TEXT, price REAL, cat_group TEXT DEFAULT ''
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS inventory (
         id INTEGER PRIMARY KEY AUTOINCREMENT, cat_id INTEGER, data TEXT
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS preorders (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, cat_id INTEGER, quantity INTEGER,
         total REAL, status TEXT DEFAULT 'pending', created_at TEXT, paid_at TEXT DEFAULT NULL
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, item_data TEXT, date TEXT
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS balances (
         user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS referrals (
         id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, referral_id INTEGER UNIQUE, date TEXT
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS referral_earnings (
         id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, amount REAL, from_user_id INTEGER, date TEXT
     )''')
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS promo_codes (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         code TEXT UNIQUE, 
@@ -383,18 +354,14 @@ async def init_db():
         max_uses INTEGER, 
         used INTEGER DEFAULT 0
     )''')
-    
     try:
         await conn.execute("ALTER TABLE promo_codes ADD COLUMN promo_type TEXT DEFAULT 'fixed'")
     except:
         pass
-    
     await conn.execute('''CREATE TABLE IF NOT EXISTS balance_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, operation TEXT, date TEXT, admin_id INTEGER DEFAULT NULL
     )''')
-    
     await conn.commit()
-    
     try:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_inventory_cat_id ON inventory(cat_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_history_user_id ON history(user_id)")
@@ -403,11 +370,9 @@ async def init_db():
         await conn.commit()
     except:
         pass
-    
     logger.info("Database initialized")
 
 async def update_catalog_descriptions():
-    """Обновляет описания категорий без удаления БД"""
     descriptions = {
         "MTS 1960+": '🥚 <b>MTS 1960+</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nMTS - без TOTP, ВП, отчеканный на ФССП',
         "MEGAFON 1960+": '📱 <b>MEGAFON 1960+</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nMEGAFON - без TOTP, ВП, отчеканный на ФССП',
@@ -416,59 +381,39 @@ async def update_catalog_descriptions():
         "T2 SMENA MIKS 1960+": '📱 <b>T2 SMENA MIKS 1960+</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nT2 - без TOTP, ВП, отчеканный на ФССП',
         "Чистые ГУ 1960-1969": '🇷🇺 <b>Чистые ГУ 1960-1969</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nНовый, чистый аккаунт ГУ. Официально подтверждён с помощью панели МФЦ.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
         "ГУ под ГК 1960-1969": '😂 <b>ГУ под ГК 1960-1969</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nАккаунт ГУ предназначенный только для подписей. Оформить банки/верифы на него не выйдет.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
-        # ── НОВЫЕ КАТЕГОРИИ 1980-2006 ──────────────────────────────────────────
         "Чистые ГУ 1980-2006": '🇷🇺 <b>Чистые ГУ 1980-2006</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nНовый, чистый аккаунт ГУ. Официально подтверждён с помощью панели МФЦ.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
         "ГУ под ГК 1980-2006": '😂 <b>ГУ под ГК 1980-2006</b>\n\n<tg-emoji emoji-id="5895440460322706085">📌</tg-emoji> <b>Описание товара:</b>\nАккаунт ГУ предназначенный только для подписей. Оформить банки/верифы на него не выйдет.\n\n<b>Что это значит:</b>\n• Вы — первый владелец. История нулевая.\n• Привяжите свой номер автоматически с помощью нашего бота — аккаунт ГУ будет на 100% под вашим контролем.\n• Альтернативный способ если нет номеров под привяз, приобретите ключом TOTP, также бот выдаст вам код входа в ГК (последующие коды можно будет запрашивать через историю покупок)\n• Без блокировок. Сразу готов к использованию.\n\n<b>Всё просто:</b> купили → получили → пользуетесь. Это занимает 2 минуты.',
     }
-    
     prices = {
-        "MTS 1960+": 4.5,
-        "MEGAFON 1960+": 4.0,
-        "BEELINE 1960+": 3.5,
-        "YOTA 1960+": 3.5,
-        "T2 SMENA MIKS 1960+": 4.0,
-        "Чистые ГУ 1960-1969": 25.0,
-        "ГУ под ГК 1960-1969": 18.0,
-        # ── НОВЫЕ КАТЕГОРИИ 1980-2006 ──────────────────────────────────────────
-        "Чистые ГУ 1980-2006": 25.0,
-        "ГУ под ГК 1980-2006": 18.0,
+        "MTS 1960+": 4.5, "MEGAFON 1960+": 4.0, "BEELINE 1960+": 3.5,
+        "YOTA 1960+": 3.5, "T2 SMENA MIKS 1960+": 4.0,
+        "Чистые ГУ 1960-1969": 25.0, "ГУ под ГК 1960-1969": 18.0,
+        "Чистые ГУ 1980-2006": 25.0, "ГУ под ГК 1980-2006": 18.0,
     }
-    
     cat_groups = {
-        "MTS 1960+": "l0gu_1970",
-        "MEGAFON 1960+": "l0gu_1970",
-        "BEELINE 1960+": "l0gu_1970",
-        "YOTA 1960+": "l0gu_1970",
+        "MTS 1960+": "l0gu_1970", "MEGAFON 1960+": "l0gu_1970",
+        "BEELINE 1960+": "l0gu_1970", "YOTA 1960+": "l0gu_1970",
         "T2 SMENA MIKS 1960+": "l0gu_1970",
-        "Чистые ГУ 1960-1969": "gy_1970",
-        "ГУ под ГК 1960-1969": "gy_1970",
-        # ── НОВЫЕ КАТЕГОРИИ 1980-2006 ──────────────────────────────────────────
-        "Чистые ГУ 1980-2006": "gy_1970",
-        "ГУ под ГК 1980-2006": "gy_1970",
+        "Чистые ГУ 1960-1969": "gy_1970", "ГУ под ГК 1960-1969": "gy_1970",
+        "Чистые ГУ 1980-2006": "gy_1970", "ГУ под ГК 1980-2006": "gy_1970",
     }
-    
     for name, desc in descriptions.items():
         existing = await fetchone("SELECT id FROM categories WHERE name = ?", (name,))
         price = prices.get(name, 0)
         cat_group = cat_groups.get(name, "")
-        
         if existing:
             await execute_query(
                 "UPDATE categories SET desc = ?, price = ?, cat_group = ? WHERE name = ?",
                 (desc, price, cat_group, name), commit=True
             )
-            logger.info(f"Updated category: {name}")
         else:
             await execute_query(
                 "INSERT INTO categories (name, desc, price, cat_group) VALUES (?, ?, ?, ?)",
                 (name, desc, price, cat_group), commit=True
             )
-            logger.info(f"Created category: {name}")
-    
     logger.info("Catalog descriptions updated")
 
 async def setup_catalog():
-    """Инициализация каталога (обновляет описания)"""
     await update_catalog_descriptions()
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -479,15 +424,12 @@ async def get_balance(user_id: int) -> float:
 async def update_balance(user_id: int, amount: float, operation: str = "unknown", admin_id: int = None):
     current_balance = await get_balance(user_id)
     new_balance = current_balance + amount
-    
     if new_balance < 0 and operation not in ["admin_give"]:
         logger.warning(f"Attempt to set negative balance for user {user_id}: {new_balance}")
         return False
-    
     await execute_query("INSERT INTO balances (user_id, balance) VALUES (?, ?) "
                        "ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?",
                        (user_id, amount, amount), commit=True)
-    
     await execute_query("INSERT INTO balance_history (user_id, amount, operation, date, admin_id) VALUES (?, ?, ?, ?, ?)",
                        (user_id, amount, operation, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), admin_id), commit=True)
     return True
@@ -504,13 +446,11 @@ async def get_referral_info(user_id: int) -> Tuple[int, float]:
 
 async def save_user(username: str, user_id: int, referrer_id: int = None):
     await execute_query("UPDATE users SET username = ? WHERE id = ?", (username, user_id), commit=True)
-    
     existing = await fetchone("SELECT id FROM users WHERE id = ?", (user_id,))
     if not existing:
         await execute_query("INSERT INTO users (id, username, referrer_id) VALUES (?, ?, ?)",
                            (user_id, username, referrer_id), commit=True)
         await execute_query("INSERT INTO balances (user_id, balance) VALUES (?, ?)", (user_id, 0.0), commit=True)
-        
         if referrer_id:
             await execute_query("INSERT INTO referrals (referrer_id, referral_id, date) VALUES (?, ?, ?)",
                                (referrer_id, user_id, datetime.now(timezone.utc).strftime("%d.%m %H:%M")), commit=True)
@@ -519,43 +459,31 @@ async def save_user(username: str, user_id: int, referrer_id: int = None):
 async def buy_items_with_transaction(cat_id: int, quantity: int, user_id: int, total: float) -> Optional[List[tuple]]:
     stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cat_id,))
     stock_count = stock[0] if stock else 0
-    
     if stock_count < quantity:
-        logger.warning(f"Not enough stock for user {user_id}: need {quantity}, have {stock_count}")
         return None
-    
     if total > 0:
         balance = await get_balance(user_id)
         if balance < total:
-            logger.warning(f"Insufficient balance for user {user_id}: have {balance}, need {total}")
             return None
-    
     conn = await transaction()
     try:
         cursor = await conn.execute("SELECT id, data FROM inventory WHERE cat_id = ? LIMIT ?", (cat_id, quantity))
         items = await cursor.fetchall()
-        
         if len(items) < quantity:
             await conn.rollback()
             return None
-        
         ids = [item[0] for item in items]
         placeholders = ','.join('?' * len(ids))
         await conn.execute(f"DELETE FROM inventory WHERE id IN ({placeholders})", ids)
-        
         now = datetime.now(timezone.utc).strftime("%d.%m %H:%M")
         history_data = [(user_id, item[1], now) for item in items]
         await conn.executemany("INSERT INTO history (user_id, item_data, date) VALUES (?, ?, ?)", history_data)
-        
         await conn.execute("UPDATE users SET total = total + ? WHERE id = ?", (quantity, user_id))
-        
         if total > 0:
-            await conn.execute("UPDATE balances SET balance = balance - ? WHERE user_id = ? AND balance >= ?", 
+            await conn.execute("UPDATE balances SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
                              (total, user_id, total))
-        
         await conn.commit()
         return items
-        
     except Exception as e:
         await conn.rollback()
         logger.error(f"Transaction error: {e}")
@@ -565,11 +493,9 @@ async def buy_items_with_transaction(cat_id: int, quantity: int, user_id: int, t
 async def crypto_api(method: str, data: dict = None) -> dict:
     if data is None:
         data = {}
-    
     headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}
     url = f"https://pay.crypt.bot/api/{method}"
     timeout = aiohttp.ClientTimeout(total=30)
-    
     for attempt in range(3):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -578,15 +504,12 @@ async def crypto_api(method: str, data: dict = None) -> dict:
                     if result.get('ok'):
                         return result
                     else:
-                        logger.warning(f"Crypto API error on attempt {attempt + 1}: {result}")
                         if attempt == 2:
                             return {"ok": False, "description": result.get('description', 'Unknown error')}
         except Exception as e:
-            logger.error(f"Crypto API exception on attempt {attempt + 1}: {e}")
             if attempt == 2:
                 return {"ok": False, "description": str(e)}
         await asyncio.sleep(2 ** attempt)
-    
     return {"ok": False, "description": "Max retries exceeded"}
 
 # --- ПРОВЕРКА ОПЛАТЫ ---
@@ -594,10 +517,8 @@ async def check_deposit_payment(invoice_id: int, user_id: int, amount: float, ms
     async with payment_check_semaphore:
         for attempt in range(PAYMENT_CHECK_ATTEMPTS):
             await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
-            
             if invoice_id not in pending_balance_payments:
                 return
-            
             res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
             if res.get('ok') and res['result'].get('items'):
                 inv = res['result']['items'][0]
@@ -614,55 +535,45 @@ async def check_deposit_payment(invoice_id: int, user_id: int, amount: float, ms
                     await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен. Попробуйте снова.', parse_mode="HTML")
                     del pending_balance_payments[invoice_id]
                     return
-        
         if invoice_id in pending_balance_payments:
             await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Время ожидания истекло. Если вы оплатили, обратитесь в поддержку.', parse_mode="HTML")
             del pending_balance_payments[invoice_id]
 
-async def auto_check_payment(invoice_id: int, user_id: int, cat_id: int, quantity: int, 
+async def auto_check_payment(invoice_id: int, user_id: int, cat_id: int, quantity: int,
                             msg_to_edit: types.Message, total_cost: float):
     async with payment_check_semaphore:
         for attempt in range(PAYMENT_CHECK_ATTEMPTS):
             await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
-            
             if invoice_id not in pending_payments:
                 return
-            
             res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
             if res.get('ok') and res['result'].get('items'):
                 inv = res['result']['items'][0]
                 if inv['status'] == 'paid':
                     items = await buy_items_with_transaction(cat_id, quantity, user_id, total_cost)
-                    
                     if not items:
                         await bot.send_message(user_id, f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Товар закончился во время оплаты. Обратитесь в поддержку.', parse_mode="HTML")
                         del pending_payments[invoice_id]
                         return
-                    
                     res_text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Оплата подтверждена!\n\n<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">🎁</tg-emoji> Ваш товар:\n'
                     for _, i_data in items:
                         res_text += f"• `{i_data}`\n"
-                    
                     await bot.send_message(user_id, res_text, parse_mode="Markdown")
-                    
                     try:
                         await msg_to_edit.delete()
                     except:
                         pass
-                    
                     referrer = await fetchone("SELECT referrer_id FROM users WHERE id = ?", (user_id,))
                     if referrer and referrer[0]:
                         ref_bonus = round(total_cost * 0.1, 2)
                         await add_referral_earning(referrer[0], ref_bonus, user_id)
                         await bot.send_message(referrer[0], f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Вы получили {ref_bonus} USDT (10%) от покупки!', parse_mode="HTML")
-                    
                     del pending_payments[invoice_id]
                     return
                 elif inv['status'] == 'expired':
                     await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен. Создайте новый заказ.', parse_mode="HTML")
                     del pending_payments[invoice_id]
                     return
-        
         if invoice_id in pending_payments:
             await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Время автоматической проверки истекло. Обратитесь в поддержку.', parse_mode="HTML")
             del pending_payments[invoice_id]
@@ -672,33 +583,20 @@ async def cleanup_old_payments():
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL)
         now = datetime.now()
-        
-        expired = []
-        for inv_id, data in pending_payments.items():
-            if 'created_at' in data and now - data['created_at'] > timedelta(hours=1):
-                expired.append(inv_id)
-        
+        expired = [inv_id for inv_id, data in pending_payments.items()
+                   if 'created_at' in data and now - data['created_at'] > timedelta(hours=1)]
         for inv_id in expired:
             del pending_payments[inv_id]
-        
-        expired = []
-        for inv_id, data in pending_balance_payments.items():
-            if 'created_at' in data and now - data['created_at'] > timedelta(hours=1):
-                expired.append(inv_id)
-        
+        expired = [inv_id for inv_id, data in pending_balance_payments.items()
+                   if 'created_at' in data and now - data['created_at'] > timedelta(hours=1)]
         for inv_id in expired:
             del pending_balance_payments[inv_id]
-        
         current_time = time.time()
-        expired_users = []
-        for user_id, (attempts, last_attempt) in user_promo_attempts.items():
-            if current_time - last_attempt > PROMO_BLOCK_TIME:
-                expired_users.append(user_id)
-        
-        for user_id in expired_users:
-            del user_promo_attempts[user_id]
-        
-        logger.info(f"Cleanup completed")
+        expired_users = [uid for uid, (attempts, last_attempt) in user_promo_attempts.items()
+                         if current_time - last_attempt > PROMO_BLOCK_TIME]
+        for uid in expired_users:
+            del user_promo_attempts[uid]
+        logger.info("Cleanup completed")
 
 # --- ФУНКЦИЯ ДЛЯ ПОКАЗА КАТЕГОРИЙ ГРУППЫ ---
 async def show_categories_group(call: types.CallbackQuery, group_key: str):
@@ -707,30 +605,24 @@ async def show_categories_group(call: types.CallbackQuery, group_key: str):
         emoji_ids = [CustomEmoji.MTS, CustomEmoji.MEGAFON, CustomEmoji.BEELINE, CustomEmoji.YOTA, CustomEmoji.T2]
     elif group_key == "gy":
         cat_group = "gy_1970"
-        # 4 категории: Чистые 1960, ГУ под ГК 1960, Чистые 1980, ГУ под ГК 1980
         emoji_ids = [CustomEmoji.GY, CustomEmoji.GY_EMOJI, CustomEmoji.GY, CustomEmoji.GY_EMOJI]
     else:
         await call.answer("Неизвестная группа")
         return
-    
     cats = await fetchall("SELECT id, name FROM categories WHERE cat_group = ?", (cat_group,))
     if not cats:
         await call.message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> В этом разделе пока нет товаров.', parse_mode="HTML")
         await call.answer()
         return
-    
     kb = InlineKeyboardBuilder()
     for idx, (cid, name) in enumerate(cats):
         if idx < len(emoji_ids):
             kb.button(text=name, callback_data=f"view_{cid}", icon_custom_emoji_id=emoji_ids[idx])
         else:
             kb.button(text=name, callback_data=f"view_{cid}")
-    
     kb.button(text="Назад к разделам", callback_data="back_to_main_catalog", icon_custom_emoji_id=CustomEmoji.BACK)
     kb.adjust(1)
-    
     text = f'<tg-emoji emoji-id="{CustomEmoji.GUN}">🔫</tg-emoji> Выберите категорию:'
-    
     await call.message.delete()
     await send_with_image(call.message, 'EleghantCatalog', text, kb.as_markup())
     await call.answer()
@@ -742,7 +634,6 @@ async def text_catalog(message: types.Message):
     kb.button(text="GY 1970+", callback_data="group_gy", icon_custom_emoji_id=CustomEmoji.GY)
     kb.button(text="Л0гu 1960+, все операторы", callback_data="group_l0gu", icon_custom_emoji_id=CustomEmoji.MEGAFON)
     kb.adjust(1)
-    
     text = f'<tg-emoji emoji-id="{CustomEmoji.GUN}">🔫</tg-emoji> <b>Каталог товаров</b>\n\nВыберите интересующий вас раздел:'
     await send_with_image(message, 'EleghantCatalog', text, kb.as_markup())
 
@@ -760,25 +651,21 @@ async def text_deposit(message: types.Message, state: FSMContext):
 async def text_help(message: types.Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="Написать администратору", url=SUPPORT_URL, icon_custom_emoji_id=CustomEmoji.SUPPORT)
-    
     text = (f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏰</tg-emoji> <b>Помощь и поддержка</b>\n\n'
             f'Если у вас возникли вопросы или проблемы, вы можете связаться с администрацией.\n\n'
             f'Нажмите кнопку ниже, чтобы написать в поддержку.')
-    
     await send_with_image(message, 'EleghantSupport', text, kb.as_markup())
 
 @dp.message(F.text == "Предзаказ")
 async def text_preorder(message: types.Message, state: FSMContext):
     text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER}">🕞</tg-emoji> <b>Предзаказ товаров</b>\n\nВыберите категорию для предзаказа:'
     await send_with_image(message, 'EleghantPreorder', text)
-    
     kb = InlineKeyboardBuilder()
     categories = await fetchall("SELECT id, name FROM categories")
     for cat_id, name in categories:
         kb.button(text=name, callback_data=f"preorder_cat_{cat_id}")
     kb.button(text="❌ Отмена", callback_data="cancel_preorder", icon_custom_emoji_id=CustomEmoji.WARNING)
     kb.adjust(1)
-    
     await message.answer("Выберите категорию:", reply_markup=kb.as_markup())
 
 # --- КАТАЛОГ ---
@@ -793,9 +680,7 @@ async def back_to_main_catalog(call: types.CallbackQuery):
     kb.button(text="GY 1970+", callback_data="group_gy", icon_custom_emoji_id=CustomEmoji.GY)
     kb.button(text="Л0гu 1960+, все операторы", callback_data="group_l0gu", icon_custom_emoji_id=CustomEmoji.MEGAFON)
     kb.adjust(1)
-    
     text = f'<tg-emoji emoji-id="{CustomEmoji.GUN}">🔫</tg-emoji> <b>Каталог товаров</b>\n\nВыберите интересующий вас раздел:'
-    
     await call.message.delete()
     await send_with_image(call.message, 'EleghantCatalog', text, kb.as_markup())
     await call.answer()
@@ -815,32 +700,25 @@ async def view_cat_cb(call: types.CallbackQuery):
     except:
         await call.answer("❌ Ошибка")
         return
-    
     cat = await fetchone("SELECT name, desc, price, cat_group FROM categories WHERE id = ?", (cid,))
     if not cat:
         await call.answer("❌ Категория не найдена")
         return
-    
     cat_name, cat_desc, cat_price, cat_group = cat
     stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cid,))
     stock_count = stock[0] if stock else 0
-    
     text = f"{cat_desc}\n\n<tg-emoji emoji-id=\"{CustomEmoji.MONEY}\">💵</tg-emoji> Цена: <b>{cat_price} USDT/шт</b>\n<tg-emoji emoji-id=\"{CustomEmoji.WARNING}\">❗️</tg-emoji> Наличие: {stock_count} шт."
-    
     kb = InlineKeyboardBuilder()
     if stock_count > 0:
         kb.button(text="🛒 Купить", callback_data=f"buy_{cid}")
     kb.button(text="🕞 Предзаказ", callback_data=f"preorder_from_cat_{cid}")
-    
     if cat_group == "l0gu_1970":
         kb.button(text="Назад к операторам", callback_data="back_to_l0gu", icon_custom_emoji_id=CustomEmoji.BACK)
     elif cat_group == "gy_1970":
         kb.button(text="Назад к GY", callback_data="back_to_gy", icon_custom_emoji_id=CustomEmoji.BACK)
     else:
         kb.button(text="Назад к разделам", callback_data="back_to_main_catalog", icon_custom_emoji_id=CustomEmoji.BACK)
-    
     kb.adjust(1)
-    
     await call.message.delete()
     await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await call.answer()
@@ -853,137 +731,90 @@ async def preorder_cat_cb(call: types.CallbackQuery, state: FSMContext):
     except (IndexError, ValueError):
         await call.answer("❌ Ошибка", show_alert=True)
         return
-    
     cat = await fetchone("SELECT name, price FROM categories WHERE id = ?", (cat_id,))
     if not cat:
         await call.answer("❌ Категория не найдена", show_alert=True)
         return
-    
     await state.update_data(preorder_cat_id=cat_id, preorder_cat_name=cat[0], preorder_price=cat[1])
     await state.set_state(ShopState.waiting_for_preorder_quantity)
-    
     await call.message.answer(
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> <b>Предзаказ: {cat[0]}</b>\n'
         f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Цена: {cat[1]} USDT/шт\n\n'
         f'<tg-emoji emoji-id="{CustomEmoji.QUESTION}">❓</tg-emoji> Сколько штук хотите предзаказать? (максимум {MAX_QUANTITY_PER_PURCHASE} шт.)\n'
-        f"Отправьте число:",
-        parse_mode="HTML"
+        f"Отправьте число:", parse_mode="HTML"
     )
     await call.answer()
 
 @dp.message(ShopState.waiting_for_preorder_quantity)
 async def preorder_quantity_msg(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        return await message.answer(
-            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите положительное число.',
-            parse_mode="HTML"
-        )
-    
+        return await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите положительное число.', parse_mode="HTML")
     qty = int(message.text)
     if qty <= 0 or qty > MAX_QUANTITY_PER_PURCHASE:
-        return await message.answer(
-            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите число от 1 до {MAX_QUANTITY_PER_PURCHASE}.',
-            parse_mode="HTML"
-        )
-    
+        return await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите число от 1 до {MAX_QUANTITY_PER_PURCHASE}.', parse_mode="HTML")
     data = await state.get_data()
     cat_id = data['preorder_cat_id']
     cat_name = data['preorder_cat_name']
     price = data['preorder_price']
     total = round(price * qty, 2)
-    
     await execute_query(
         "INSERT INTO preorders (user_id, cat_id, quantity, total, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
         (message.from_user.id, cat_id, qty, total, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "pending"),
         commit=True
     )
-    
-    preorder = await fetchone("SELECT id FROM preorders WHERE user_id = ? AND cat_id = ? AND created_at = ? ORDER BY id DESC LIMIT 1",
-                              (message.from_user.id, cat_id, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
+    preorder = await fetchone("SELECT id FROM preorders WHERE user_id = ? AND cat_id = ? ORDER BY id DESC LIMIT 1",
+                              (message.from_user.id, cat_id))
     preorder_id = preorder[0] if preorder else None
-    
     inv = await crypto_api("createInvoice", {
-        "asset": "USDT",
-        "amount": str(total),
-        "description": f"Предзаказ: {cat_name} x{qty}",
-        "expires_in": 3600
+        "asset": "USDT", "amount": str(total),
+        "description": f"Предзаказ: {cat_name} x{qty}", "expires_in": 3600
     })
-    
     if not inv.get('ok'):
         await message.answer(f"⚠ Ошибка API: {inv.get('description', 'Неизвестная ошибка')}")
         await state.clear()
         return
-    
     invoice_id = inv['result']['invoice_id']
     pending_payments[invoice_id] = {
-        'user_id': message.from_user.id,
-        'cat_id': cat_id,
-        'quantity': qty,
-        'total': total,
-        'created_at': datetime.now(),
-        'is_preorder': True,
-        'preorder_id': preorder_id
+        'user_id': message.from_user.id, 'cat_id': cat_id, 'quantity': qty,
+        'total': total, 'created_at': datetime.now(), 'is_preorder': True, 'preorder_id': preorder_id
     }
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Оплатить предзаказ", url=inv['result']['pay_url'], icon_custom_emoji_id=CustomEmoji.CHECKMARK)
     kb.adjust(1)
-    
     msg = await message.answer(
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CLOCK}">🕞</tg-emoji> <b>Предзаказ оформлен!</b>\n\n'
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> Товар: {cat_name}\n'
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_SETTINGS}">🔢</tg-emoji> Количество: {qty} шт.\n'
         f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total} USDT\n\n'
-        f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> После оплаты товар будет зарезервирован.\n'
-        f'Как только товар появится в наличии, он будет автоматически выдан.\n\n'
         f'Нажмите кнопку ниже для оплаты:',
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
+        reply_markup=kb.as_markup(), parse_mode="HTML"
     )
     pending_payments[invoice_id]['msg'] = msg
-    
     asyncio.create_task(auto_check_preorder_payment(invoice_id, message.from_user.id, cat_id, qty, msg, total, cat_name, preorder_id))
     await state.clear()
 
-async def auto_check_preorder_payment(invoice_id: int, user_id: int, cat_id: int, quantity: int, 
+async def auto_check_preorder_payment(invoice_id: int, user_id: int, cat_id: int, quantity: int,
                                       msg_to_edit: types.Message, total_cost: float, cat_name: str, preorder_id: int = None):
     async with payment_check_semaphore:
         for attempt in range(PAYMENT_CHECK_ATTEMPTS):
             await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
-            
             if invoice_id not in pending_payments:
                 return
-            
             res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
             if res.get('ok') and res['result'].get('items'):
                 inv = res['result']['items'][0]
                 if inv['status'] == 'paid':
                     if preorder_id:
-                        await execute_query(
-                            "UPDATE preorders SET status = 'paid', paid_at = ? WHERE id = ?",
-                            (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), preorder_id),
-                            commit=True
-                        )
-                    else:
-                        await execute_query(
-                            "UPDATE preorders SET status = 'paid', paid_at = ? WHERE user_id = ? AND cat_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
-                            (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), user_id, cat_id),
-                            commit=True
-                        )
-                    
+                        await execute_query("UPDATE preorders SET status = 'paid', paid_at = ? WHERE id = ?",
+                                          (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), preorder_id), commit=True)
                     del pending_payments[invoice_id]
-                    
-                    await bot.send_message(
-                        user_id,
+                    await bot.send_message(user_id,
                         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Предзаказ оплачен!</b>\n\n'
                         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> Товар: {cat_name}\n'
-                        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_SETTINGS}">🔢</tg-emoji> Количество: {quantity} шт.\n'
                         f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total_cost} USDT\n\n'
-                        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_COMPLETED}">🎁</tg-emoji> Как только товар появится в наличии, он будет автоматически выдан вам.\n'
-                        f'Вы можете отслеживать статус предзаказа в разделе <b>Профиль → Мои предзаказы</b>.',
+                        f'Как только товар появится, он будет автоматически выдан вам.',
                         parse_mode="HTML"
                     )
-                    
                     try:
                         await msg_to_edit.delete()
                     except:
@@ -991,35 +822,14 @@ async def auto_check_preorder_payment(invoice_id: int, user_id: int, cat_id: int
                     return
                 elif inv['status'] == 'expired':
                     if preorder_id:
-                        await execute_query(
-                            "UPDATE preorders SET status = 'expired' WHERE id = ?",
-                            (preorder_id,),
-                            commit=True
-                        )
-                    else:
-                        await execute_query(
-                            "UPDATE preorders SET status = 'expired' WHERE user_id = ? AND cat_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
-                            (user_id, cat_id),
-                            commit=True
-                        )
-                    await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет на предзаказ просрочен. Попробуйте снова.', parse_mode="HTML")
+                        await execute_query("UPDATE preorders SET status = 'expired' WHERE id = ?", (preorder_id,), commit=True)
+                    await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен.', parse_mode="HTML")
                     del pending_payments[invoice_id]
                     return
-        
         if invoice_id in pending_payments:
             if preorder_id:
-                await execute_query(
-                    "UPDATE preorders SET status = 'expired' WHERE id = ?",
-                    (preorder_id,),
-                    commit=True
-                )
-            else:
-                await execute_query(
-                    "UPDATE preorders SET status = 'expired' WHERE user_id = ? AND cat_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
-                    (user_id, cat_id),
-                    commit=True
-                )
-            await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Время ожидания истекло. Если вы оплатили, обратитесь в поддержку.', parse_mode="HTML")
+                await execute_query("UPDATE preorders SET status = 'expired' WHERE id = ?", (preorder_id,), commit=True)
+            await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Время ожидания истекло.', parse_mode="HTML")
             del pending_payments[invoice_id]
 
 @dp.callback_query(F.data == "cancel_preorder")
@@ -1028,7 +838,6 @@ async def cancel_preorder_cb(call: types.CallbackQuery, state: FSMContext):
     await call.message.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Предзаказ отменен', parse_mode="HTML")
     await call.answer()
 
-# ── BUG FIX: split("_")[3] — callback "preorder_from_cat_N".split("_") = ['preorder','from','cat','N']
 @dp.callback_query(F.data.startswith("preorder_from_cat_"))
 async def preorder_from_cat_cb(call: types.CallbackQuery, state: FSMContext):
     try:
@@ -1036,21 +845,17 @@ async def preorder_from_cat_cb(call: types.CallbackQuery, state: FSMContext):
     except (IndexError, ValueError):
         await call.answer("❌ Ошибка", show_alert=True)
         return
-    
     cat = await fetchone("SELECT name, price FROM categories WHERE id = ?", (cid,))
     if not cat:
         await call.answer("❌ Категория не найдена", show_alert=True)
         return
-    
     await state.update_data(preorder_cat_id=cid, preorder_cat_name=cat[0], preorder_price=cat[1])
     await state.set_state(ShopState.waiting_for_preorder_quantity)
-    
     await call.message.answer(
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CLOCK}">🕞</tg-emoji> <b>Предзаказ: {cat[0]}</b>\n'
         f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Цена: {cat[1]} USDT/шт\n\n'
         f'<tg-emoji emoji-id="{CustomEmoji.QUESTION}">❓</tg-emoji> Сколько штук хотите предзаказать? (максимум {MAX_QUANTITY_PER_PURCHASE} шт.)\n'
-        f"Отправьте число:",
-        parse_mode="HTML"
+        f"Отправьте число:", parse_mode="HTML"
     )
     await call.answer()
 
@@ -1062,7 +867,6 @@ async def buy_cb(call: types.CallbackQuery, state: FSMContext):
     except:
         await call.answer("❌ Ошибка")
         return
-    
     await state.update_data(cid=cid)
     await state.set_state(ShopState.waiting_for_quantity)
     await call.message.answer(
@@ -1074,41 +878,27 @@ async def buy_cb(call: types.CallbackQuery, state: FSMContext):
 @dp.message(ShopState.waiting_for_quantity)
 async def quantity_msg(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        return await message.answer(
-            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите положительное число.',
-            parse_mode="HTML"
-        )
-    
+        return await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите положительное число.', parse_mode="HTML")
     qty = int(message.text)
     if qty <= 0 or qty > MAX_QUANTITY_PER_PURCHASE:
-        return await message.answer(
-            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите число от 1 до {MAX_QUANTITY_PER_PURCHASE}.',
-            parse_mode="HTML"
-        )
-    
+        return await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите число от 1 до {MAX_QUANTITY_PER_PURCHASE}.', parse_mode="HTML")
     data = await state.get_data()
     cid = data['cid']
-    
     stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cid,))
     stock_count = stock[0] if stock else 0
-    
     if qty > stock_count:
         await state.clear()
         return await message.answer(
-            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> В наличии только {stock_count} шт.\n\n'
-            f'Вы можете оформить <b>предзаказ</b> на большее количество!',
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> В наличии только {stock_count} шт.\n\nВы можете оформить <b>предзаказ</b>!',
             parse_mode="HTML"
         )
-    
     cat = await fetchone("SELECT name, price FROM categories WHERE id = ?", (cid,))
     if not cat:
         await state.clear()
         return await message.answer("❌ Категория не найдена")
-    
     price = float(cat[1])
     total = round(price * qty, 2)
     balance = await get_balance(message.from_user.id)
-    
     discount = 0
     if hasattr(bot, 'user_promos') and message.from_user.id in bot.user_promos:
         promo_data = bot.user_promos[message.from_user.id]
@@ -1117,23 +907,19 @@ async def quantity_msg(message: types.Message, state: FSMContext):
             total = round(total - discount, 2)
             await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.PROMO}">🎫</tg-emoji> Применена скидка {promo_data["discount"]}%! Сумма к оплате: {total} USDT', parse_mode="HTML")
             del bot.user_promos[message.from_user.id]
-    
     await state.update_data(quantity=qty, total=total, cat_name=cat[0], cid=cid)
     await state.set_state(ShopState.waiting_for_payment_method)
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="Оплатить CryptoBot", callback_data="pay_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
     kb.button(text="Оплатить с баланса", callback_data="pay_balance", icon_custom_emoji_id=CustomEmoji.BALANCE_PAY)
     kb.adjust(1)
-    
     await message.answer(
         f"Вы выбрали {hbold(cat[0])} x{qty}\n"
         f"Цена за шт: {price} USDT\n"
         f"Итого: {hbold(str(total))} USDT\n"
         f"💰 Ваш баланс: {hbold(str(balance))} USDT\n\n"
         f"Выберите способ оплаты:",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
+        reply_markup=kb.as_markup(), parse_mode="HTML"
     )
 
 @dp.callback_query(F.data == "pay_crypto")
@@ -1144,41 +930,29 @@ async def pay_crypto_cb(call: types.CallbackQuery, state: FSMContext):
     total = data['total']
     cat_name = data['cat_name']
     user_id = call.from_user.id
-    
     inv = await crypto_api("createInvoice", {
-        "asset": "USDT",
-        "amount": str(total),
-        "description": f"{cat_name} x{quantity}",
-        "expires_in": 1800
+        "asset": "USDT", "amount": str(total),
+        "description": f"{cat_name} x{quantity}", "expires_in": 1800
     })
-    
     if not inv.get('ok'):
         await call.message.answer(f"⚠ Ошибка API: {inv.get('description', 'Неизвестная ошибка')}")
         await state.clear()
         return
-    
     invoice_id = inv['result']['invoice_id']
     pending_payments[invoice_id] = {
-        'user_id': user_id,
-        'cat_id': cid,
-        'quantity': quantity,
-        'total': total,
-        'created_at': datetime.now(),
-        'is_preorder': False
+        'user_id': user_id, 'cat_id': cid, 'quantity': quantity,
+        'total': total, 'created_at': datetime.now(), 'is_preorder': False
     }
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="Оплатить", url=inv['result']['pay_url'], icon_custom_emoji_id=CustomEmoji.CHECKMARK)
     kb.adjust(1)
-    
     msg = await call.message.answer(
-        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> {cat_name} — {quantity} шт.\n<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total} USDT\n<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> Счет действителен 30 минут\n\n'
-        f'Нажмите кнопку ниже для оплаты:',
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
+        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> {cat_name} — {quantity} шт.\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total} USDT\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> Счет действителен 30 минут\n\nНажмите кнопку ниже для оплаты:',
+        reply_markup=kb.as_markup(), parse_mode="HTML"
     )
     pending_payments[invoice_id]['msg'] = msg
-    
     asyncio.create_task(auto_check_payment(invoice_id, user_id, cid, quantity, msg, total))
     await state.clear()
     await call.answer()
@@ -1191,44 +965,34 @@ async def pay_balance_cb(call: types.CallbackQuery, state: FSMContext):
     total = data['total']
     cat_name = data['cat_name']
     user_id = call.from_user.id
-    
     balance = await get_balance(user_id)
     if balance < total:
         await call.message.answer(
-            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Недостаточно средств на балансе.\n'
-            f'Ваш баланс: {balance} USDT\n'
-            f'Необходимо: {total} USDT',
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Недостаточно средств.\nВаш баланс: {balance} USDT\nНеобходимо: {total} USDT',
             parse_mode="HTML"
         )
         await state.clear()
         await call.answer()
         return
-    
     try:
         items = await buy_items_with_transaction(cid, quantity, user_id, total)
-        
         if not items:
-            await call.message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Товар закончился во время покупки. Деньги не списаны.', parse_mode="HTML")
+            await call.message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Товар закончился. Деньги не списаны.', parse_mode="HTML")
             await state.clear()
             await call.answer()
             return
-        
         res_text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Оплачено с баланса!\n\n<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">🎁</tg-emoji> Ваш товар:\n'
         for _, i_data in items:
             res_text += f"• `{i_data}`\n"
-        
         await call.message.answer(res_text, parse_mode="Markdown")
-        
         referrer = await fetchone("SELECT referrer_id FROM users WHERE id = ?", (user_id,))
         if referrer and referrer[0]:
             ref_bonus = round(total * 0.1, 2)
             await add_referral_earning(referrer[0], ref_bonus, user_id)
             await bot.send_message(referrer[0], f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Вы получили {ref_bonus} USDT (10%) от покупки!', parse_mode="HTML")
-        
     except Exception as e:
         logger.error(f"Payment error: {e}")
-        await call.message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Произошла ошибка при покупке. Обратитесь в поддержку.', parse_mode="HTML")
-    
+        await call.message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Ошибка при покупке. Обратитесь в поддержку.', parse_mode="HTML")
     await state.clear()
     await call.answer()
 
@@ -1237,13 +1001,10 @@ async def show_profile_with_image(user_id: int, target_message: types.Message):
     username = (await bot.get_chat(user_id)).username or "не указан"
     total_bought = await fetchone("SELECT total FROM users WHERE id = ?", (user_id,))
     balance = await get_balance(user_id)
-    
     active_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE user_id = ? AND status = 'paid'", (user_id,))
     active_preorders_count = active_preorders[0] if active_preorders else 0
-    
     pending_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE user_id = ? AND status = 'pending'", (user_id,))
     pending_preorders_count = pending_preorders[0] if pending_preorders else 0
-    
     text = (
         f'<tg-emoji emoji-id="{CustomEmoji.PROFILE_EMOJI}">🎥</tg-emoji> <b>Профиль</b>\n'
         f'<tg-emoji emoji-id="{CustomEmoji.SHIELD}">🛡</tg-emoji> ID: {user_id}\n'
@@ -1253,14 +1014,12 @@ async def show_profile_with_image(user_id: int, target_message: types.Message):
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CLOCK}">🕞</tg-emoji> Активных предзаказов: {active_preorders_count}\n'
         f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> Ожидают оплаты: {pending_preorders_count}'
     )
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="История покупок", callback_data="profile_history", icon_custom_emoji_id=CustomEmoji.TROPHY)
     kb.button(text="Реферальная ссылка", callback_data="profile_referral", icon_custom_emoji_id=CustomEmoji.USER)
     kb.button(text="Промокод", callback_data="profile_promo", icon_custom_emoji_id=CustomEmoji.PROMO)
     kb.button(text="Мои предзаказы", callback_data="profile_preorders", icon_custom_emoji_id=CustomEmoji.PREORDER_CLOCK)
     kb.adjust(1)
-    
     await send_with_image(target_message, 'EleghantProfile', text, kb.as_markup())
 
 @dp.callback_query(F.data == "profile_preorders")
@@ -1269,42 +1028,28 @@ async def profile_preorders_cb(call: types.CallbackQuery):
         "SELECT id, cat_id, quantity, total, created_at, paid_at, status FROM preorders WHERE user_id = ? ORDER BY created_at DESC",
         (call.from_user.id,)
     )
-    
     if not preorders:
         await call.message.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> У вас нет предзаказов.', parse_mode="HTML")
         return
-    
     text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CLOCK}">🕞</tg-emoji> <b>Ваши предзаказы:</b>\n\n'
     for pid, cat_id, qty, total, created, paid_at, status in preorders:
         cat = await fetchone("SELECT name FROM categories WHERE id = ?", (cat_id,))
         cat_name = cat[0] if cat else "Неизвестно"
-        
-        if status == "pending":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji>'
-            status_text = "Ожидает оплаты"
-        elif status == "paid":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji>'
-            status_text = "Оплачен, ожидает выдачи"
-        elif status == "expired":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji>'
-            status_text = "Просрочен"
-        elif status == "completed":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_COMPLETED}">🎁</tg-emoji>'
-            status_text = "Выполнен"
-        else:
-            status_emoji = "❓"
-            status_text = "Неизвестно"
-        
+        status_map = {
+            "pending": (f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji>', "Ожидает оплаты"),
+            "paid": (f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji>', "Оплачен, ожидает выдачи"),
+            "expired": (f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji>', "Просрочен"),
+            "completed": (f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_COMPLETED}">🎁</tg-emoji>', "Выполнен"),
+        }
+        status_emoji, status_text = status_map.get(status, ("❓", "Неизвестно"))
         text += f"{status_emoji} <b>#{pid}</b> - {cat_name}\n"
-        text += f'   <tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> {qty} шт. | <tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> {total} USDT\n'
-        text += f'   <tg-emoji emoji-id="{CustomEmoji.PREORDER_CALENDAR}">📅</tg-emoji> Создан: {created[:10] if created else "Неизвестно"}\n'
+        text += f'   📦 {qty} шт. | 💰 {total} USDT\n'
+        text += f'   📅 Создан: {created[:10] if created else "Неизвестно"}\n'
         if paid_at:
-            text += f'   <tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">💳</tg-emoji> Оплачен: {paid_at[:10]}\n'
+            text += f'   💳 Оплачен: {paid_at[:10]}\n'
         text += f"   {status_emoji} Статус: {status_text}\n\n"
-    
     kb = InlineKeyboardBuilder()
-    kb.button(text="👀 Назад к профилю", callback_data="back_to_profile", icon_custom_emoji_id=CustomEmoji.BACK)
-    
+    kb.button(text="Назад к профилю", callback_data="back_to_profile", icon_custom_emoji_id=CustomEmoji.BACK)
     try:
         await call.message.delete()
     except:
@@ -1312,16 +1057,13 @@ async def profile_preorders_cb(call: types.CallbackQuery):
     await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await call.answer()
 
-# --- ИСТОРИЯ ПОКУПОК ---
 @dp.callback_query(F.data == "profile_history")
 async def profile_history_cb(call: types.CallbackQuery):
     history = await fetchall(
         "SELECT id, item_data, date FROM history WHERE user_id = ? ORDER BY id DESC LIMIT 10",
         (call.from_user.id,)
     )
-    
     history_emoji = f'<tg-emoji emoji-id="{CustomEmoji.HISTORY}">✏️</tg-emoji>'
-    
     if not history:
         text = f"{history_emoji} У вас пока нет покупок."
     else:
@@ -1329,10 +1071,8 @@ async def profile_history_cb(call: types.CallbackQuery):
         for hid, item, date in history:
             short_item = item[:30] + "..." if len(item) > 30 else item
             text += f"• {date}: {hcode(short_item)}\n"
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="Назад к профилю", callback_data="back_to_profile", icon_custom_emoji_id=CustomEmoji.BACK)
-    
     try:
         await call.message.delete()
     except:
@@ -1346,18 +1086,14 @@ async def profile_referral_cb(call: types.CallbackQuery):
     ref_count, ref_earn = await get_referral_info(user_id)
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start=ref_{user_id}"
-    
     text = (
-        f'<tg-emoji emoji-id="{CustomEmoji.LINK}">🔗</tg-emoji> <b>Ваша реферальная ссылка:</b>\n'
-        f'{link}\n\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.LINK}">🔗</tg-emoji> <b>Ваша реферальная ссылка:</b>\n{link}\n\n'
         f'<tg-emoji emoji-id="{CustomEmoji.USER}">👤</tg-emoji> Рефералов: {ref_count}\n'
-        f'<tg-emoji emoji-id="{CustomEmoji.PLUS}">➕</tg-emoji> Заработано с рефералов: {ref_earn} USDT\n\n'
-        "За каждого приглашенного пользователя, совершившего покупку, вы получаете 10% от суммы его покупки.\n"
+        f'<tg-emoji emoji-id="{CustomEmoji.PLUS}">➕</tg-emoji> Заработано: {ref_earn} USDT\n\n'
+        "За каждого приглашённого пользователя, совершившего покупку, вы получаете 10% от суммы его покупки."
     )
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="Назад к профилю", callback_data="back_to_profile", icon_custom_emoji_id=CustomEmoji.BACK)
-    
     try:
         await call.message.delete()
     except:
@@ -1375,55 +1111,41 @@ async def profile_promo_cb(call: types.CallbackQuery, state: FSMContext):
 async def promo_code_activate(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     code = message.text.strip().upper()
-    
     current_time = time.time()
     if user_id in user_promo_attempts:
         attempts, last_attempt = user_promo_attempts[user_id]
         if attempts >= MAX_PROMO_ATTEMPTS and current_time - last_attempt < PROMO_BLOCK_TIME:
-            await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Слишком много неудачных попыток. Попробуйте через {int(PROMO_BLOCK_TIME - (current_time - last_attempt))} секунд.', parse_mode="HTML")
+            await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Слишком много попыток. Попробуйте через {int(PROMO_BLOCK_TIME - (current_time - last_attempt))} сек.', parse_mode="HTML")
             await state.clear()
             return
-    
     promo = await fetchone("SELECT amount, max_uses, used, promo_type FROM promo_codes WHERE code = ?", (code,))
-    
     if not promo:
-        if user_id not in user_promo_attempts:
-            user_promo_attempts[user_id] = (1, current_time)
-        else:
-            attempts, _ = user_promo_attempts[user_id]
-            user_promo_attempts[user_id] = (attempts + 1, current_time)
-        
+        user_promo_attempts[user_id] = (user_promo_attempts.get(user_id, (0, current_time))[0] + 1, current_time)
         await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Промокод не найден.', parse_mode="HTML")
         await state.clear()
         return
-    
     amount, max_uses, used, promo_type = promo
     if used >= max_uses:
         await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Промокод уже использован максимальное количество раз.', parse_mode="HTML")
         await state.clear()
         return
-    
     if user_id in user_promo_attempts:
         del user_promo_attempts[user_id]
-    
     if promo_type == 'percent':
-        await state.update_data(active_promo={'code': code, 'amount': amount, 'type': 'percent'})
         await message.answer(
             f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Промокод {code} активирован!\n'
-            f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_STATS}">🎯</tg-emoji> Скидка: {amount}% на следующую покупку!\n\n'
-            f'Скидка автоматически применится при оформлении заказа.',
+            f'Скидка: {amount}% на следующую покупку!',
             parse_mode="HTML"
         )
         if not hasattr(bot, 'user_promos'):
             bot.user_promos = {}
         bot.user_promos[user_id] = {'code': code, 'discount': amount, 'type': 'percent'}
         await execute_query("UPDATE promo_codes SET used = used + 1 WHERE code = ?", (code,), commit=True)
-        await state.clear()
     else:
         await update_balance(message.from_user.id, amount, "promo")
         await execute_query("UPDATE promo_codes SET used = used + 1 WHERE code = ?", (code,), commit=True)
-        await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Промокод активирован! На ваш баланс зачислено {amount} USDT.', parse_mode="HTML")
-        await state.clear()
+        await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Промокод активирован! Зачислено {amount} USDT.', parse_mode="HTML")
+    await state.clear()
 
 # --- ПОПОЛНЕНИЕ БАЛАНСА ---
 @dp.message(ShopState.waiting_for_deposit_amount)
@@ -1435,38 +1157,24 @@ async def deposit_amount(message: types.Message, state: FSMContext):
         amount = round(amount, 2)
     except:
         return await message.answer("❌ Введите число.")
-    
     inv = await crypto_api("createInvoice", {
-        "asset": "USDT",
-        "amount": str(amount),
-        "description": f"Пополнение баланса пользователя {message.from_user.id}",
-        "expires_in": 1800
+        "asset": "USDT", "amount": str(amount),
+        "description": f"Пополнение баланса пользователя {message.from_user.id}", "expires_in": 1800
     })
-    
     if not inv.get('ok'):
         await message.answer(f"⚠ Ошибка API: {inv.get('description', 'Неизвестная ошибка')}")
         await state.clear()
         return
-    
     invoice_id = inv['result']['invoice_id']
-    pending_balance_payments[invoice_id] = {
-        'user_id': message.from_user.id,
-        'amount': amount,
-        'created_at': datetime.now()
-    }
-    
+    pending_balance_payments[invoice_id] = {'user_id': message.from_user.id, 'amount': amount, 'created_at': datetime.now()}
     kb = InlineKeyboardBuilder()
     kb.button(text="Оплатить", url=inv['result']['pay_url'], icon_custom_emoji_id=CustomEmoji.CHECKMARK)
     kb.adjust(1)
-    
     msg = await message.answer(
-        f'<tg-emoji emoji-id="{CustomEmoji.DEPOSIT}">💰</tg-emoji> Пополнение баланса\nСумма: {amount} USDT\n\n'
-        f'Нажмите кнопку ниже для оплаты:',
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
+        f'<tg-emoji emoji-id="{CustomEmoji.DEPOSIT}">💰</tg-emoji> Пополнение баланса\nСумма: {amount} USDT\n\nНажмите кнопку ниже для оплаты:',
+        reply_markup=kb.as_markup(), parse_mode="HTML"
     )
     pending_balance_payments[invoice_id]['msg'] = msg
-    
     asyncio.create_task(check_deposit_payment(invoice_id, message.from_user.id, amount, msg))
     await state.clear()
 
@@ -1489,34 +1197,26 @@ async def cmd_start_plain(message: types.Message):
 async def handle_start(message: types.Message, referrer_id: int = None):
     user_id = message.from_user.id
     username = message.from_user.username or ""
-    
     existing = await fetchone("SELECT accepted FROM users WHERE id = ?", (user_id,))
-    
     if not existing:
         await save_user(username, user_id, referrer_id)
         accepted = 0
     else:
         await execute_query("UPDATE users SET username = ? WHERE id = ?", (username, user_id), commit=True)
         accepted = existing[0]
-    
     if accepted == 0:
         accept_kb = InlineKeyboardBuilder()
         accept_kb.button(text="Да, я ознакомился", callback_data="accept_agreement", icon_custom_emoji_id=CustomEmoji.ACCEPT)
-        
         await message.answer(
-            f"👋 Добро пожаловать в EleghantShop, вы сделали правильный выбор!\n\n"
-            f"Чтобы продолжить работу с ботом, примите {hlink('Условия пользования сервиса', AGREEMENT_URL)}.",
-            reply_markup=accept_kb.as_markup(),
-            parse_mode="HTML",
-            disable_web_page_preview=True
+            f"👋 Добро пожаловать в EleghantShop!\n\nЧтобы продолжить, примите {hlink('Условия пользования сервиса', AGREEMENT_URL)}.",
+            reply_markup=accept_kb.as_markup(), parse_mode="HTML", disable_web_page_preview=True
         )
     else:
         await show_main_menu(message)
 
 @dp.callback_query(F.data == "accept_agreement")
 async def accept_agreement_callback(call: types.CallbackQuery):
-    user_id = call.from_user.id
-    await execute_query("UPDATE users SET accepted = 1 WHERE id = ?", (user_id,), commit=True)
+    await execute_query("UPDATE users SET accepted = 1 WHERE id = ?", (call.from_user.id,), commit=True)
     await call.answer("✅ Соглашение принято!")
     await call.message.delete()
     await show_main_menu(call.message)
@@ -1530,68 +1230,133 @@ async def show_main_menu(message: types.Message):
     )
     await send_with_image(message, 'EleghantShopIcon', caption_text, main_keyboard())
 
-# --- АДМИН ПАНЕЛЬ ---
+# ═══════════════════════════════════════════════════════════════════════════════
+# АДМИН ПАНЕЛЬ
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @dp.message(Command("admintools"))
 async def admin_tools(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="📢 Рассылка", callback_data="admin_broadcast")
     kb.button(text="📢 Рассылка с картинкой", callback_data="admin_broadcast_image")
     kb.button(text="💰 Выдать баланс", callback_data="admin_give_balance")
     kb.button(text="📦 Добавить товар", callback_data="admin_add_stock")
+    kb.button(text="📄 Загрузить товары из .txt", callback_data="admin_add_stock_txt")
     kb.button(text="🎫 Создать промокод", callback_data="admin_create_promo")
     kb.button(text="💰 Изменить цену категории", callback_data="admin_change_price")
     kb.button(text="🕞 Предзаказы", callback_data="admin_preorders")
     kb.adjust(2)
-    
     await message.answer("🔧 Панель администратора\nВыберите действие:", reply_markup=kb.as_markup())
 
-# --- РАССЫЛКА ---
+# ───────────────────────────────────────────────────────────────────────────────
+# РАССЫЛКА — с полным форматированием HTML (жирный, моно, цитата, прем-эмодзи)
+# ───────────────────────────────────────────────────────────────────────────────
+
+BROADCAST_HELP = (
+    "📢 <b>Рассылка</b>\n\n"
+    "Напишите текст рассылки. Поддерживается <b>HTML-форматирование</b>:\n\n"
+    "<b>Теги форматирования:</b>\n"
+    "• <code>&lt;b&gt;жирный&lt;/b&gt;</code>\n"
+    "• <code>&lt;i&gt;курсив&lt;/i&gt;</code>\n"
+    "• <code>&lt;u&gt;подчёркнутый&lt;/u&gt;</code>\n"
+    "• <code>&lt;s&gt;зачёркнутый&lt;/s&gt;</code>\n"
+    "• <code>&lt;code&gt;моноширный&lt;/code&gt;</code>\n"
+    "• <code>&lt;pre&gt;блок кода&lt;/pre&gt;</code>\n"
+    "• <code>&lt;blockquote&gt;цитата&lt;/blockquote&gt;</code>\n\n"
+    "<b>Премиум-эмодзи:</b>\n"
+    "<code>&lt;tg-emoji emoji-id=\"ID\"&gt;🔥&lt;/tg-emoji&gt;</code>\n\n"
+    "<b>Ссылки:</b>\n"
+    "<code>&lt;a href=\"https://...\"&gt;текст&lt;/a&gt;</code>\n\n"
+    "Просто отправьте текст с нужным оформлением:"
+)
+
+@dp.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_start(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(broadcast_photo=None)
+    await state.set_state(AdminState.broadcast_text)
+    await call.message.edit_text(BROADCAST_HELP, parse_mode="HTML")
+    await call.answer()
+
 @dp.callback_query(F.data == "admin_broadcast_image")
 async def admin_broadcast_image_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return
     await state.set_state(AdminState.broadcast_with_image)
-    await call.message.edit_text("📢 Отправьте картинку для рассылки (как фото):")
+    await call.message.edit_text(
+        "📢 <b>Рассылка с картинкой</b>\n\nСначала отправьте <b>фото</b> (как фото, не файл):",
+        parse_mode="HTML"
+    )
     await call.answer()
 
 @dp.message(AdminState.broadcast_with_image)
 async def admin_broadcast_image_get(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     if not message.photo:
-        await message.answer("❌ Пожалуйста, отправьте фото.")
+        await message.answer("❌ Пожалуйста, отправьте фото (не файл).")
         return
-    
     photo = message.photo[-1]
     await state.update_data(broadcast_photo=photo.file_id)
     await state.set_state(AdminState.broadcast_text)
-    await message.answer("📢 Введите текст рассылки (можно использовать HTML):")
+    await message.answer(BROADCAST_HELP, parse_mode="HTML")
 
 @dp.message(AdminState.broadcast_text)
 async def admin_broadcast_send(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
-    text = message.text
+
+    # Берём текст вместе со всеми HTML-entities как есть
+    # message.text — plain text (без разметки)
+    # message.html_text — текст с HTML-тегами (жирный, курсив, моно, прем-эмодзи и т.д.)
+    text = message.html_text  # ← ключевое изменение: используем html_text
     data = await state.get_data()
     photo_id = data.get('broadcast_photo')
-    
+
+    # Превью перед рассылкой
+    preview_kb = InlineKeyboardBuilder()
+    preview_kb.button(text="✅ Отправить всем", callback_data="confirm_broadcast")
+    preview_kb.button(text="❌ Отменить", callback_data="cancel_broadcast")
+    preview_kb.adjust(2)
+
+    await state.update_data(broadcast_text=text)
+
+    preview_msg = "👁 <b>Предпросмотр рассылки:</b>\n\n"
+    if photo_id:
+        await message.answer_photo(
+            photo=photo_id,
+            caption=f"{preview_msg}{text}" if len(preview_msg + text) <= 1024 else text,
+            parse_mode="HTML",
+            reply_markup=preview_kb.as_markup()
+        )
+    else:
+        await message.answer(
+            f"{preview_msg}{text}",
+            parse_mode="HTML",
+            reply_markup=preview_kb.as_markup()
+        )
+
+@dp.callback_query(F.data == "confirm_broadcast")
+async def confirm_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    text = data.get('broadcast_text', '')
+    photo_id = data.get('broadcast_photo')
+
     users = await fetchall("SELECT id FROM users WHERE accepted = 1")
-    
     if not users:
-        await message.answer("❌ Нет пользователей для рассылки.")
+        await call.message.edit_text("❌ Нет пользователей для рассылки.")
         await state.clear()
         return
-    
-    status_msg = await message.answer(f"⏳ Начинаю рассылку {len(users)} пользователям...")
-    
+
+    status_msg = await call.message.answer(f"⏳ Начинаю рассылку {len(users)} пользователям...")
     sent = 0
     failed = 0
-    
+
     for idx, (user_id,) in enumerate(users):
         try:
             if photo_id:
@@ -1599,44 +1364,159 @@ async def admin_broadcast_send(message: types.Message, state: FSMContext):
             else:
                 await bot.send_message(user_id, text, parse_mode="HTML")
             sent += 1
-            
             if idx > 0 and idx % 100 == 0:
                 await status_msg.edit_text(f"📊 Прогресс: {idx}/{len(users)}\n✅ Отправлено: {sent}\n❌ Ошибок: {failed}")
-            
             await asyncio.sleep(0.05)
         except Exception as e:
             failed += 1
             logger.error(f"Ошибка отправки пользователю {user_id}: {e}")
-    
+
     await status_msg.edit_text(f"✅ Рассылка завершена.\nОтправлено: {sent}\nОшибок: {failed}")
     await state.clear()
-
-@dp.callback_query(F.data == "admin_broadcast")
-async def admin_broadcast_start(call: types.CallbackQuery, state: FSMContext):
-    if call.from_user.id != ADMIN_ID:
-        return
-    await state.set_state(AdminState.broadcast_text)
-    await call.message.edit_text("📢 Введите текст рассылки (можно использовать HTML):")
     await call.answer()
 
-# --- СОЗДАНИЕ ПРОМОКОДОВ ---
+@dp.callback_query(F.data == "cancel_broadcast")
+async def cancel_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    await call.message.edit_text("❌ Рассылка отменена.")
+    await call.answer()
+
+# ───────────────────────────────────────────────────────────────────────────────
+# ЗАГРУЗКА ТОВАРОВ ЧЕРЕЗ .TXT (1 строка = 1 товар)
+# ───────────────────────────────────────────────────────────────────────────────
+
+@dp.callback_query(F.data == "admin_add_stock_txt")
+async def admin_add_stock_txt_start(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    categories = await fetchall("SELECT id, name FROM categories")
+    if not categories:
+        await call.message.edit_text("❌ Нет категорий.")
+        return
+    kb = InlineKeyboardBuilder()
+    for cat_id, name in categories:
+        kb.button(text=f"[{cat_id}] {name}", callback_data=f"txt_cat_{cat_id}")
+    kb.adjust(1)
+    await call.message.edit_text(
+        "📄 <b>Загрузка товаров из .txt</b>\n\nВыберите категорию:",
+        reply_markup=kb.as_markup(), parse_mode="HTML"
+    )
+    await state.set_state(AdminState.add_stock_txt_cat_id)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("txt_cat_"), AdminState.add_stock_txt_cat_id)
+async def admin_add_stock_txt_cat(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    try:
+        cat_id = int(call.data.split("_")[2])
+    except:
+        await call.answer("❌ Ошибка")
+        return
+    cat = await fetchone("SELECT id, name FROM categories WHERE id = ?", (cat_id,))
+    if not cat:
+        await call.answer("❌ Категория не найдена")
+        return
+    await state.update_data(txt_cat_id=cat_id, txt_cat_name=cat[1])
+    await state.set_state(AdminState.add_stock_txt_file)
+    await call.message.edit_text(
+        f"📄 <b>Категория: {cat[1]}</b>\n\n"
+        f"Отправьте .txt файл, где <b>каждая строка — один товар</b>.\n\n"
+        f"<i>Пустые строки будут пропущены автоматически.</i>",
+        parse_mode="HTML"
+    )
+    await call.answer()
+
+@dp.message(AdminState.add_stock_txt_file)
+async def admin_add_stock_txt_file(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not message.document:
+        await message.answer("❌ Пожалуйста, отправьте .txt файл документом.")
+        return
+    doc = message.document
+    if not doc.file_name or not doc.file_name.lower().endswith('.txt'):
+        await message.answer("❌ Файл должен быть в формате .txt")
+        return
+    if doc.file_size and doc.file_size > 5 * 1024 * 1024:  # 5 МБ
+        await message.answer("❌ Файл слишком большой (максимум 5 МБ).")
+        return
+
+    data = await state.get_data()
+    cat_id = data['txt_cat_id']
+    cat_name = data['txt_cat_name']
+
+    status_msg = await message.answer("⏳ Читаю файл...")
+
+    try:
+        file = await bot.get_file(doc.file_id)
+        file_path = file.file_path
+
+        # Скачиваем содержимое файла
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(file_url) as resp:
+                raw_bytes = await resp.read()
+
+        # Декодируем (пробуем utf-8, потом cp1251)
+        try:
+            raw_text = raw_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            raw_text = raw_bytes.decode('cp1251', errors='replace')
+
+        lines = raw_text.splitlines()
+        items = [line.strip() for line in lines if line.strip()]  # убираем пустые строки
+
+        if not items:
+            await status_msg.edit_text("❌ Файл пустой или не содержит валидных строк.")
+            await state.clear()
+            return
+
+        if len(items) > MAX_BULK_ADD:
+            await status_msg.edit_text(
+                f"❌ В файле {len(items)} строк, максимум {MAX_BULK_ADD}.\n"
+                f"Разбейте файл на части."
+            )
+            await state.clear()
+            return
+
+        await status_msg.edit_text(f"⏳ Найдено {len(items)} товаров. Сохраняю в базу данных...")
+
+        items_to_insert = [(cat_id, item) for item in items]
+        await executemany("INSERT INTO inventory (cat_id, data) VALUES (?, ?)", items_to_insert)
+
+        await status_msg.edit_text(
+            f"✅ <b>Готово!</b>\n\n"
+            f"📦 Категория: <b>{cat_name}</b>\n"
+            f"➕ Добавлено товаров: <b>{len(items)} шт.</b>\n\n"
+            f"<i>Первый товар: <code>{items[0][:60]}</code></i>",
+            parse_mode="HTML"
+        )
+        logger.info(f"Admin {message.from_user.id} uploaded {len(items)} items to category {cat_id} via txt")
+
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке txt файла: {e}")
+        await status_msg.edit_text(f"❌ Ошибка при обработке файла: {e}")
+
+    await state.clear()
+
+# ───────────────────────────────────────────────────────────────────────────────
+# ПРОМОКОДЫ
+# ───────────────────────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "admin_create_promo")
 async def admin_create_promo_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="💰 Фиксированная сумма (USDT)", callback_data="promo_type_fixed")
     kb.button(text="📊 Процентная скидка (%)", callback_data="promo_type_percent")
     kb.adjust(1)
-    
     await call.message.edit_text(
-        "🎫 <b>Создание промокода</b>\n\n"
-        "Выберите тип промокода:\n"
-        "• <b>Фиксированная сумма</b> - начисляет указанное количество USDT на баланс\n"
-        "• <b>Процентная скидка</b> - даёт скидку в % на следующую покупку",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
+        "🎫 <b>Создание промокода</b>\n\nВыберите тип промокода:",
+        reply_markup=kb.as_markup(), parse_mode="HTML"
     )
     await state.set_state(AdminState.create_promo_type)
     await call.answer()
@@ -1645,68 +1525,55 @@ async def admin_create_promo_start(call: types.CallbackQuery, state: FSMContext)
 async def admin_create_promo_type(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return
-    
     promo_type = call.data.split("_")[2]
     await state.update_data(promo_type=promo_type)
     await state.set_state(AdminState.create_promo_code)
-    
-    type_text = "фиксированную сумму в USDT" if promo_type == "fixed" else "процент скидки (от 1 до 100)"
-    await call.message.edit_text(f"🎫 Введите код промокода (буквы и цифры, без пробелов):\n\nТип: {type_text}")
+    type_text = "фиксированную сумму в USDT" if promo_type == "fixed" else "процент скидки (1–100)"
+    await call.message.edit_text(f"🎫 Введите код промокода (буквы и цифры):\n\nТип: {type_text}")
     await call.answer()
 
 @dp.message(AdminState.create_promo_code)
 async def admin_create_promo_code(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     code = message.text.strip().upper()
     if not code.replace('_', '').replace('-', '').isalnum():
-        await message.answer("❌ Код может содержать только буквы, цифры, символы _ и -")
+        await message.answer("❌ Код может содержать только буквы, цифры, _ и -")
         return
-    
     existing = await fetchone("SELECT code FROM promo_codes WHERE code = ?", (code,))
     if existing:
         await message.answer("❌ Промокод с таким кодом уже существует.")
         return
-    
     await state.update_data(code=code)
-    
     data = await state.get_data()
     promo_type = data.get('promo_type', 'fixed')
-    
+    await state.set_state(AdminState.create_promo_value)
     if promo_type == 'fixed':
-        await state.set_state(AdminState.create_promo_value)
-        await message.answer("🎫 Введите сумму начисления (в USDT):\n\nПример: 10.5")
+        await message.answer("🎫 Введите сумму начисления (USDT):\nПример: 10.5")
     else:
-        await state.set_state(AdminState.create_promo_value)
-        await message.answer("🎫 Введите процент скидки (от 1 до 100):\n\nПример: 15")
+        await message.answer("🎫 Введите процент скидки (1–100):\nПример: 15")
 
 @dp.message(AdminState.create_promo_value)
 async def admin_create_promo_value(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     data = await state.get_data()
     promo_type = data.get('promo_type', 'fixed')
-    
     try:
         if promo_type == 'fixed':
-            value = float(message.text.replace(',', '.'))
-            value = round(value, 2)
+            value = round(float(message.text.replace(',', '.')), 2)
             if value <= 0:
                 raise ValueError
             value_text = f"{value} USDT"
         else:
-            value = float(message.text.replace(',', '.'))
+            value = round(float(message.text.replace(',', '.')), 1)
             if value <= 0 or value > 100:
-                await message.answer("❌ Процент скидки должен быть от 1 до 100.")
+                await message.answer("❌ Процент должен быть от 1 до 100.")
                 return
-            value = round(value, 1)
             value_text = f"{value}%"
     except:
         await message.answer("❌ Введите корректное число.")
         return
-    
     await state.update_data(promo_value=value)
     await state.set_state(AdminState.create_promo_limit)
     await message.answer(f"🎫 Введите максимальное количество использований:\n\nЗначение: {value_text}")
@@ -1715,7 +1582,6 @@ async def admin_create_promo_value(message: types.Message, state: FSMContext):
 async def admin_create_promo_limit(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     try:
         limit = int(message.text)
         if limit <= 0:
@@ -1723,32 +1589,30 @@ async def admin_create_promo_limit(message: types.Message, state: FSMContext):
     except:
         await message.answer("❌ Введите положительное целое число.")
         return
-    
     data = await state.get_data()
     code = data['code']
     promo_type = data['promo_type']
     value = data['promo_value']
-    
     await execute_query(
         "INSERT INTO promo_codes (code, amount, promo_type, max_uses) VALUES (?, ?, ?, ?)",
         (code, value, promo_type, limit), commit=True
     )
-    
     type_text = "сумму" if promo_type == 'fixed' else "скидку"
     value_text = f"{value} USDT" if promo_type == 'fixed' else f"{value}%"
-    
     await message.answer(
         f"✅ <b>Промокод создан!</b>\n\n"
         f"📝 Код: <code>{code}</code>\n"
         f"🎯 Тип: {type_text}\n"
         f"💰 Значение: {value_text}\n"
-        f"📊 Лимит использований: {limit}\n\n"
-        f"Пользователи могут активировать его в разделе <b>Профиль → Промокод</b>",
+        f"📊 Лимит: {limit}",
         parse_mode="HTML"
     )
     await state.clear()
 
-# --- АДМИН-ФУНКЦИИ: ВЫДАЧА БАЛАНСА ---
+# ───────────────────────────────────────────────────────────────────────────────
+# ВЫДАЧА БАЛАНСА
+# ───────────────────────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "admin_give_balance")
 async def admin_give_balance_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
@@ -1761,43 +1625,39 @@ async def admin_give_balance_start(call: types.CallbackQuery, state: FSMContext)
 async def admin_give_balance_user(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     try:
         user_id = int(message.text)
     except:
-        await message.answer("❌ Неверный ID. Введите число.")
+        await message.answer("❌ Введите число.")
         return
-    
     user_exists = await fetchone("SELECT id FROM users WHERE id = ?", (user_id,))
     if not user_exists:
-        await message.answer("❌ Пользователь с таким ID не найден.")
+        await message.answer("❌ Пользователь не найден.")
         await state.clear()
         return
-    
     await state.update_data(target_user_id=user_id)
     await state.set_state(AdminState.give_balance_amount)
-    await message.answer("💰 Введите сумму для начисления (может быть отрицательной для списания):")
+    await message.answer("💰 Введите сумму (может быть отрицательной для списания):")
 
 @dp.message(AdminState.give_balance_amount)
 async def admin_give_balance_amount(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     try:
-        amount = float(message.text.replace(',', '.'))
-        amount = round(amount, 2)
+        amount = round(float(message.text.replace(',', '.')), 2)
     except:
-        await message.answer("❌ Неверная сумма. Введите число.")
+        await message.answer("❌ Введите число.")
         return
-    
     data = await state.get_data()
     user_id = data['target_user_id']
-    
     await update_balance(user_id, amount, "admin_give", ADMIN_ID)
     await message.answer(f"✅ Баланс пользователя {user_id} изменён на {amount} USDT.")
     await state.clear()
 
-# --- АДМИН-ФУНКЦИИ: ДОБАВЛЕНИЕ ТОВАРА ---
+# ───────────────────────────────────────────────────────────────────────────────
+# ДОБАВЛЕНИЕ ТОВАРА (поштучно)
+# ───────────────────────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "admin_add_stock")
 async def admin_add_stock_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
@@ -1810,25 +1670,20 @@ async def admin_add_stock_start(call: types.CallbackQuery, state: FSMContext):
 async def admin_add_stock_cat(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     try:
         cat_id = int(message.text)
     except:
-        await message.answer("❌ Неверный ID. Введите число.")
+        await message.answer("❌ Введите число.")
         return
-    
     cat = await fetchone("SELECT id, name FROM categories WHERE id = ?", (cat_id,))
     if not cat:
-        await message.answer("❌ Категория с таким ID не найдена.")
+        await message.answer("❌ Категория не найдена.")
         await state.clear()
         return
-    
     await state.update_data(cat_id=cat_id, cat_name=cat[1])
     await state.set_state(AdminState.add_stock_count)
     await message.answer(
-        f"📦 <b>Категория: {cat[1]}</b>\n\n"
-        f"Сколько товаров хотите добавить? (от 1 до {MAX_BULK_ADD})\n\n"
-        f"<i>Вы можете добавить до {MAX_BULK_ADD} товаров за один раз.</i>",
+        f"📦 <b>Категория: {cat[1]}</b>\n\nСколько товаров хотите добавить? (1–{MAX_BULK_ADD})",
         parse_mode="HTML"
     )
 
@@ -1836,7 +1691,6 @@ async def admin_add_stock_cat(message: types.Message, state: FSMContext):
 async def admin_add_stock_count(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     try:
         count = int(message.text)
         if count < 1 or count > MAX_BULK_ADD:
@@ -1845,15 +1699,10 @@ async def admin_add_stock_count(message: types.Message, state: FSMContext):
     except:
         await message.answer("❌ Введите число.")
         return
-    
     await state.update_data(total_count=count, current_index=0, items=[])
     await state.set_state(AdminState.add_stock_data)
-    
     await message.answer(
-        f"📦 <b>Добавление товаров</b>\n\n"
-        f"Всего нужно добавить: {count} шт.\n"
-        f"Товар #1 из {count}\n\n"
-        f"Введите данные товара (текст, который получит пользователь):",
+        f"📦 Товар #1 из {count}\n\nВведите данные товара:",
         parse_mode="HTML"
     )
 
@@ -1861,71 +1710,55 @@ async def admin_add_stock_count(message: types.Message, state: FSMContext):
 async def admin_add_stock_data(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     data = await state.get_data()
     cat_id = data['cat_id']
     total_count = data['total_count']
     current_index = data.get('current_index', 0)
     items = data.get('items', [])
-    
     items.append(message.text)
     current_index += 1
-    
     if current_index < total_count:
         await state.update_data(current_index=current_index, items=items)
-        await message.answer(
-            f"✅ Товар #{current_index} добавлен!\n\n"
-            f"Товар #{current_index + 1} из {total_count}\n"
-            f"Введите данные следующего товара:",
-            parse_mode="HTML"
-        )
+        await message.answer(f"✅ Товар #{current_index} добавлен!\n\nТовар #{current_index + 1} из {total_count}\nВведите данные:")
     else:
-        await message.answer(f"⏳ Сохраняю {total_count} товаров в базу данных...")
-        
+        await message.answer(f"⏳ Сохраняю {total_count} товаров...")
         items_to_insert = [(cat_id, item) for item in items]
         await executemany("INSERT INTO inventory (cat_id, data) VALUES (?, ?)", items_to_insert)
-        
         await message.answer(
-            f"✅ <b>Готово!</b>\n\n"
-            f"Добавлено товаров: {total_count} шт.\n"
-            f"Категория: {data.get('cat_name', 'ID: ' + str(cat_id))}",
+            f"✅ <b>Готово!</b>\n\nДобавлено: {total_count} шт.\nКатегория: {data.get('cat_name', str(cat_id))}",
             parse_mode="HTML"
         )
-        
         logger.info(f"Admin added {total_count} items to category {cat_id}")
         await state.clear()
 
-# --- АДМИН-ФУНКЦИИ: ИЗМЕНЕНИЕ ЦЕНЫ ---
+# ───────────────────────────────────────────────────────────────────────────────
+# ИЗМЕНЕНИЕ ЦЕНЫ
+# ───────────────────────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "admin_change_price")
 async def admin_change_price_start(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return
-    
     categories = await fetchall("SELECT id, name FROM categories")
     if not categories:
         await call.message.edit_text("❌ Нет категорий.")
         return
-    
     kb = InlineKeyboardBuilder()
     for cat_id, name in categories:
         kb.button(text=name, callback_data=f"change_price_cat_{cat_id}")
     kb.adjust(1)
-    
-    await call.message.edit_text("💰 Выберите категорию для изменения цены:", reply_markup=kb.as_markup())
+    await call.message.edit_text("💰 Выберите категорию:", reply_markup=kb.as_markup())
     await call.answer()
 
-# ── BUG FIX: split("_")[3] — "change_price_cat_N".split("_") = ['change','price','cat','N']
 @dp.callback_query(F.data.startswith("change_price_cat_"))
 async def admin_change_price_cat(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return
-    
     try:
         cat_id = int(call.data.split("_")[3])
     except:
         await call.answer("❌ Ошибка")
         return
-    
     await state.update_data(change_cat_id=cat_id)
     await state.set_state(AdminState.change_price_value)
     await call.message.answer("💰 Введите новую цену в USDT:")
@@ -1935,7 +1768,6 @@ async def admin_change_price_cat(call: types.CallbackQuery, state: FSMContext):
 async def admin_change_price_value(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     try:
         new_price = float(message.text.replace(',', '.'))
         if new_price <= 0:
@@ -1943,87 +1775,60 @@ async def admin_change_price_value(message: types.Message, state: FSMContext):
     except:
         await message.answer("❌ Введите положительное число.")
         return
-    
     data = await state.get_data()
     cat_id = data['change_cat_id']
-    
     await execute_query("UPDATE categories SET price = ? WHERE id = ?", (new_price, cat_id), commit=True)
-    await message.answer(f"✅ Цена категории обновлена на {new_price} USDT.")
+    await message.answer(f"✅ Цена обновлена на {new_price} USDT.")
     await state.clear()
 
-# --- АДМИН-ФУНКЦИИ: ПРЕДЗАКАЗЫ ---
+# ───────────────────────────────────────────────────────────────────────────────
+# ПРЕДЗАКАЗЫ (АДМИН)
+# ───────────────────────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "admin_preorders")
 async def admin_preorders_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
-    
     preorders = await fetchall("""
         SELECT p.id, p.user_id, u.username, c.name, p.quantity, p.total, p.created_at, p.paid_at, p.status 
         FROM preorders p 
         JOIN categories c ON p.cat_id = c.id 
         LEFT JOIN users u ON p.user_id = u.id
-        ORDER BY 
-            CASE p.status 
-                WHEN 'paid' THEN 1 
-                WHEN 'pending' THEN 2 
-                ELSE 3 
-            END,
-            p.created_at DESC
+        ORDER BY CASE p.status WHEN 'paid' THEN 1 WHEN 'pending' THEN 2 ELSE 3 END, p.created_at DESC
         LIMIT 50
     """)
-    
     if not preorders:
         await call.message.edit_text("📦 Нет предзаказов.")
         return
-    
-    paid_preorders = []
-    pending_preorders = []
-    other_preorders = []
-    
-    for preorder in preorders:
-        status = preorder[8]
-        if status == 'paid':
-            paid_preorders.append(preorder)
-        elif status == 'pending':
-            pending_preorders.append(preorder)
-        else:
-            other_preorders.append(preorder)
-    
+    paid = [p for p in preorders if p[8] == 'paid']
+    pending = [p for p in preorders if p[8] == 'pending']
+    other = [p for p in preorders if p[8] not in ('paid', 'pending')]
     text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CLOCK}">🕞</tg-emoji> <b>Управление предзаказами</b>\n\n'
-    
-    if paid_preorders:
-        text += f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Оплаченные (ожидают выдачи):</b>\n'
-        for pid, uid, username, cat_name, qty, total, created, paid_at, status in paid_preorders[:10]:
-            username_str = f"@{username}" if username else f"ID:{uid}"
-            text += f"   #{pid} | {username_str} | {cat_name} x{qty} | {total} USDT\n"
-        if len(paid_preorders) > 10:
-            text += f"   ... и еще {len(paid_preorders) - 10}\n"
+    if paid:
+        text += f'✅ <b>Оплаченные (ожидают выдачи):</b>\n'
+        for pid, uid, username, cat_name, qty, total, created, paid_at, status in paid[:10]:
+            u = f"@{username}" if username else f"ID:{uid}"
+            text += f"   #{pid} | {u} | {cat_name} x{qty} | {total} USDT\n"
+        if len(paid) > 10:
+            text += f"   ... и еще {len(paid) - 10}\n"
         text += "\n"
-    
-    if pending_preorders:
-        text += f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> <b>Ожидают оплаты:</b>\n'
-        for pid, uid, username, cat_name, qty, total, created, paid_at, status in pending_preorders[:5]:
-            username_str = f"@{username}" if username else f"ID:{uid}"
-            text += f"   #{pid} | {username_str} | {cat_name} x{qty} | {total} USDT\n"
-        if len(pending_preorders) > 5:
-            text += f"   ... и еще {len(pending_preorders) - 5}\n"
+    if pending:
+        text += f'⏳ <b>Ожидают оплаты:</b>\n'
+        for pid, uid, username, cat_name, qty, total, created, paid_at, status in pending[:5]:
+            u = f"@{username}" if username else f"ID:{uid}"
+            text += f"   #{pid} | {u} | {cat_name} x{qty} | {total} USDT\n"
+        if len(pending) > 5:
+            text += f"   ... и еще {len(pending) - 5}\n"
         text += "\n"
-    
-    if other_preorders:
-        text += f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> <b>Просроченные/Завершенные:</b> {len(other_preorders)}\n\n'
-    
-    text += f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_STATS}">📊</tg-emoji> <b>Статистика:</b>\n'
-    text += f"   • Всего предзаказов: {len(preorders)}\n"
-    text += f"   • Оплачено и ждут выдачи: {len(paid_preorders)}\n"
-    text += f"   • Ожидают оплаты: {len(pending_preorders)}"
-    
+    if other:
+        text += f'❌ <b>Просроченные/Завершенные:</b> {len(other)}\n\n'
+    text += f'📊 <b>Итого:</b> всего {len(preorders)}, ждут выдачи: {len(paid)}, ждут оплаты: {len(pending)}'
     kb = InlineKeyboardBuilder()
-    if paid_preorders:
+    if paid:
         kb.button(text="✅ Выдать предзаказы", callback_data="admin_complete_preorders", icon_custom_emoji_id=CustomEmoji.CHECKMARK)
-    kb.button(text="🔄 Обновить", callback_data="admin_preorders", icon_custom_emoji_id=CustomEmoji.TIME)
+    kb.button(text="🔄 Обновить", callback_data="admin_preorders")
     kb.button(text="🔙 Назад", callback_data="back_to_admin", icon_custom_emoji_id=CustomEmoji.BACK)
     kb.adjust(1)
-    
     try:
         await call.message.delete()
     except:
@@ -2035,7 +1840,6 @@ async def admin_preorders_cb(call: types.CallbackQuery):
 async def admin_complete_preorders_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
-    
     preorders = await fetchall("""
         SELECT p.id, p.user_id, p.cat_id, p.quantity, p.total, c.name, u.username
         FROM preorders p 
@@ -2044,27 +1848,18 @@ async def admin_complete_preorders_cb(call: types.CallbackQuery):
         WHERE p.status = 'paid'
         ORDER BY p.created_at ASC
     """)
-    
     if not preorders:
-        await call.answer("📦 Нет оплаченных предзаказов для выдачи", show_alert=True)
-        await admin_preorders_cb(call)
+        await call.answer("📦 Нет оплаченных предзаказов", show_alert=True)
         return
-    
-    text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Выберите предзаказ для выдачи:</b>\n\n'
+    text = '✅ <b>Оплаченные предзаказы:</b>\n\n'
     for pid, uid, cat_id, qty, total, cat_name, username in preorders[:20]:
-        username_str = f"@{username}" if username else f"ID:{uid}"
-        text += f"<b>#{pid}</b> - {cat_name} x{qty} ({total} USDT)\n"
-        text += f"   👤 {username_str}\n\n"
-    
+        u = f"@{username}" if username else f"ID:{uid}"
+        text += f"<b>#{pid}</b> - {cat_name} x{qty} ({total} USDT) | {u}\n"
     if len(preorders) > 20:
-        text += f"... и еще {len(preorders) - 20} предзаказов\n\n"
-    
-    text += "Используйте команду /complete_preorder <id> для выдачи конкретного предзаказа\n"
-    text += "Пример: /complete_preorder 123"
-    
+        text += f"\n... и еще {len(preorders) - 20}\n"
+    text += "\nИспользуйте <code>/complete_preorder &lt;id&gt;</code> для выдачи."
     kb = InlineKeyboardBuilder()
     kb.button(text="🔙 Назад", callback_data="admin_preorders", icon_custom_emoji_id=CustomEmoji.BACK)
-    
     try:
         await call.message.delete()
     except:
@@ -2075,268 +1870,124 @@ async def admin_complete_preorders_cb(call: types.CallbackQuery):
 @dp.message(Command("complete_preorder"))
 async def cmd_complete_preorder(message: types.Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У вас нет доступа к этой команде.")
         return
-    
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("❌ Использование: /complete_preorder <preorder_id>\nПример: /complete_preorder 123")
+        await message.answer("❌ Использование: /complete_preorder <preorder_id>")
         return
-    
     try:
         preorder_id = int(args[1])
     except ValueError:
-        await message.answer("❌ Неверный ID предзаказа. Введите число.")
+        await message.answer("❌ Введите число.")
         return
-    
     preorder = await fetchone("""
         SELECT p.user_id, p.cat_id, p.quantity, p.total, c.name, p.status
-        FROM preorders p 
-        JOIN categories c ON p.cat_id = c.id 
-        WHERE p.id = ?
+        FROM preorders p JOIN categories c ON p.cat_id = c.id WHERE p.id = ?
     """, (preorder_id,))
-    
     if not preorder:
         await message.answer(f"❌ Предзаказ #{preorder_id} не найден.")
         return
-    
     user_id, cat_id, quantity, total, cat_name, status = preorder
-    
     if status != 'paid':
-        await message.answer(f"❌ Предзаказ #{preorder_id} имеет статус '{status}'. Выдать можно только оплаченные предзаказы.")
+        await message.answer(f"❌ Статус предзаказа: '{status}'. Выдать можно только оплаченные.")
         return
-    
     stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cat_id,))
     stock_count = stock[0] if stock else 0
-    
     if stock_count < quantity:
-        await message.answer(f"❌ Недостаточно товара! В наличии: {stock_count}, нужно: {quantity}\n"
-                           f"Сначала добавьте товар в категорию командой /addstock")
+        await message.answer(f"❌ Товара не хватает! В наличии: {stock_count}, нужно: {quantity}")
         return
-    
     items = await buy_items_with_transaction(cat_id, quantity, user_id, 0)
-    
     if not items:
         await message.answer("❌ Ошибка при выдаче товара")
         return
-    
     await execute_query("UPDATE preorders SET status = 'completed' WHERE id = ?", (preorder_id,), commit=True)
-    
-    res_text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Ваш предзаказ выполнен!</b>\n\n'
-    res_text += f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> Товар: {cat_name}\n'
-    res_text += f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_SETTINGS}">🔢</tg-emoji> Количество: {quantity} шт.\n\n'
-    res_text += f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_COMPLETED}">🎁</tg-emoji> Данные товара:\n'
+    res_text = (
+        f'✅ <b>Ваш предзаказ выполнен!</b>\n\n'
+        f'📦 Товар: {cat_name}\n'
+        f'🔢 Количество: {quantity} шт.\n\n'
+        f'🎁 Данные товара:\n'
+    )
     for _, i_data in items:
         res_text += f"• {hcode(i_data)}\n"
-    
     try:
         await bot.send_message(user_id, res_text, parse_mode="HTML")
-        await message.answer(f"✅ Предзаказ #{preorder_id} выполнен! Товар отправлен пользователю.")
+        await message.answer(f"✅ Предзаказ #{preorder_id} выдан!")
     except Exception as e:
-        await message.answer(f"⚠️ Предзаказ #{preorder_id} выполнен, но не удалось отправить сообщение пользователю: {e}")
-    
+        await message.answer(f"⚠️ Выдан, но не удалось отправить сообщение: {e}")
     logger.info(f"Admin {message.from_user.id} completed preorder #{preorder_id} for user {user_id}")
 
-@dp.message(Command("addstock"))
-async def cmd_add_stock(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    
-    args = message.text.split()
-    if len(args) < 3:
-        await message.answer("❌ Использование: /addstock <cat_id> <количество>\n"
-                           "Затем бот запросит данные товаров.\n"
-                           "Пример: /addstock 1 5")
-        return
-    
-    try:
-        cat_id = int(args[1])
-        count = int(args[2])
-        if count < 1 or count > MAX_BULK_ADD:
-            await message.answer(f"❌ Количество должно быть от 1 до {MAX_BULK_ADD}.")
-            return
-    except ValueError:
-        await message.answer("❌ Неверный формат. Использование: /addstock <cat_id> <количество>")
-        return
-    
-    cat = await fetchone("SELECT id, name FROM categories WHERE id = ?", (cat_id,))
-    if not cat:
-        await message.answer(f"❌ Категория с ID {cat_id} не найдена.")
-        return
-    
-    await message.answer(f"📦 <b>Категория: {cat[1]}</b>\n\n"
-                        f"Введите {count} товаров. Каждый товар с новой строки.\n"
-                        f"Или отправляйте по одному товару в каждом сообщении.\n\n"
-                        f"<i>Для завершения введите /done</i>",
-                        parse_mode="HTML")
-    
-    if not hasattr(bot, 'pending_stock_add'):
-        bot.pending_stock_add = {}
-    
-    bot.pending_stock_add[message.from_user.id] = {
-        'cat_id': cat_id,
-        'cat_name': cat[1],
-        'total_count': count,
-        'items': [],
-        'current_index': 0
-    }
-
-@dp.message(Command("done"))
-async def cmd_done_add_stock(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    if not hasattr(bot, 'pending_stock_add') or message.from_user.id not in bot.pending_stock_add:
-        await message.answer("❌ Нет активного процесса добавления товаров. Используйте /addstock")
-        return
-    
-    data = bot.pending_stock_add[message.from_user.id]
-    cat_id = data['cat_id']
-    cat_name = data['cat_name']
-    items = data['items']
-    total_count = data['total_count']
-    
-    if len(items) == 0:
-        await message.answer("❌ Вы не добавили ни одного товара.")
-        del bot.pending_stock_add[message.from_user.id]
-        return
-    
-    await message.answer(f"⏳ Сохраняю {len(items)} товаров в базу данных...")
-    
-    items_to_insert = [(cat_id, item) for item in items]
-    await executemany("INSERT INTO inventory (cat_id, data) VALUES (?, ?)", items_to_insert)
-    
-    await message.answer(
-        f"✅ <b>Готово!</b>\n\n"
-        f"Добавлено товаров: {len(items)} шт.\n"
-        f"Категория: {cat_name}\n"
-        f"Ожидалось: {total_count} шт.",
-        parse_mode="HTML"
-    )
-    
-    logger.info(f"Admin {message.from_user.id} added {len(items)} items to category {cat_id}")
-    del bot.pending_stock_add[message.from_user.id]
-
-@dp.message()
-async def handle_add_stock_items(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    if not hasattr(bot, 'pending_stock_add') or message.from_user.id not in bot.pending_stock_add:
-        return
-    
-    if message.text and message.text.startswith('/'):
-        return
-    
-    data = bot.pending_stock_add[message.from_user.id]
-    items = data['items']
-    total_count = data['total_count']
-    
-    items.append(message.text)
-    
-    if len(items) < total_count:
-        await message.answer(f"✅ Товар #{len(items)} добавлен!\n\n"
-                            f"Осталось добавить: {total_count - len(items)} товаров.\n"
-                            f"Отправьте следующий товар или /done для завершения.")
-    else:
-        await message.answer(f"✅ Товар #{len(items)} добавлен! Все товары получены.\n\n"
-                            f"Введите /done для сохранения.")
-    
-    bot.pending_stock_add[message.from_user.id]['items'] = items
-
-# --- КОМАНДЫ ДЛЯ СТАТИСТИКИ ---
+# --- КОМАНДЫ СТАТИСТИКИ ---
 @dp.message(Command("userstats"))
 async def show_user_stats(message: types.Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У вас нет доступа к этой команде.")
         return
-    
     try:
         total_users = await fetchone("SELECT COUNT(*) FROM users WHERE accepted = 1")
         total_purchases = await fetchone("SELECT SUM(total) FROM users")
         total_balance = await fetchone("SELECT SUM(balance) FROM balances")
-        
         total_preorders = await fetchone("SELECT COUNT(*) FROM preorders")
         paid_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE status = 'paid'")
         completed_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE status = 'completed'")
-        
-        text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_STATS}">📊</tg-emoji> <b>Статистика бота</b>\n\n'
-        text += f"👥 Пользователей: {total_users[0] if total_users else 0}\n"
-        text += f"🛒 Всего покупок: {total_purchases[0] if total_purchases else 0}\n"
-        text += f"💰 Баланс пользователей: {total_balance[0] if total_balance else 0} USDT\n\n"
-        text += f"🕞 Всего предзаказов: {total_preorders[0] if total_preorders else 0}\n"
-        text += f"✅ Оплаченных предзаказов: {paid_preorders[0] if paid_preorders else 0}\n"
-        text += f"🎁 Выполненных предзаказов: {completed_preorders[0] if completed_preorders else 0}\n"
-        
+        text = (
+            f'📊 <b>Статистика бота</b>\n\n'
+            f"👥 Пользователей: {total_users[0] if total_users else 0}\n"
+            f"🛒 Всего покупок: {total_purchases[0] if total_purchases else 0}\n"
+            f"💰 Баланс пользователей: {total_balance[0] if total_balance else 0} USDT\n\n"
+            f"🕞 Всего предзаказов: {total_preorders[0] if total_preorders else 0}\n"
+            f"✅ Оплаченных: {paid_preorders[0] if paid_preorders else 0}\n"
+            f"🎁 Выполненных: {completed_preorders[0] if completed_preorders else 0}"
+        )
         await message.answer(text, parse_mode="HTML")
-        
     except Exception as e:
-        logger.error(f"Ошибка при показе статистики: {e}")
-        await message.answer(f"❌ Ошибка при получении статистики: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(Command("userinfo"))
 async def show_user_info(message: types.Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У вас нет доступа к этой команде.")
         return
-    
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("❌ Использование: /userinfo <user_id>\nПример: /userinfo 123456789")
+        await message.answer("❌ Использование: /userinfo <user_id>")
         return
-    
     try:
         target_user_id = int(args[1])
     except ValueError:
-        await message.answer("❌ Неверный формат ID. Введите число.")
+        await message.answer("❌ Введите число.")
         return
-    
     try:
         user_data = await fetchone("SELECT id, username, total, referrer_id FROM users WHERE id = ?", (target_user_id,))
         balance = await get_balance(target_user_id)
-        
-        preorders = await fetchall("SELECT id, cat_id, quantity, total, status, created_at FROM preorders WHERE user_id = ? ORDER BY created_at DESC", (target_user_id,))
-        
+        preorders = await fetchall(
+            "SELECT id, cat_id, quantity, total, status FROM preorders WHERE user_id = ? ORDER BY id DESC",
+            (target_user_id,)
+        )
         try:
             user = await bot.get_chat(target_user_id)
-            telegram_info = f"""
-📋 <b>Информация о пользователе</b>
-
-🆔 ID: {user.id}
-📛 Имя: {user.first_name or 'Не указано'}
-🏷 Фамилия: {user.last_name or 'Не указано'}
-🔗 Username: @{user.username if user.username else 'Не указан'}
-🌐 Язык: {user.language_code or 'Не указан'}
-⭐ Премиум: {'Да' if getattr(user, 'is_premium', False) else 'Нет'}
-            """
+            tg_info = (
+                f"🆔 ID: {user.id}\n"
+                f"📛 Имя: {user.first_name or '—'}\n"
+                f"🏷 Фамилия: {user.last_name or '—'}\n"
+                f"🔗 Username: @{user.username if user.username else '—'}\n"
+                f"⭐ Премиум: {'Да' if getattr(user, 'is_premium', False) else 'Нет'}\n\n"
+            )
         except Exception as e:
-            telegram_info = f"⚠️ Не удалось получить информацию от Telegram: {e}\n\n"
-        
-        bot_info = f"""
-📊 <b>Данные в боте</b>
-
-💰 Баланс: {balance} USDT
-🛒 Всего покупок: {user_data[2] if user_data else 0}
-🔗 Реферер: {user_data[3] if user_data and user_data[3] else 'Нет'}
-
-🕞 <b>Предзаказы пользователя:</b>
-"""
+            tg_info = f"⚠️ Не удалось получить данные Telegram: {e}\n\n"
+        bot_info = (
+            f"💰 Баланс: {balance} USDT\n"
+            f"🛒 Покупок: {user_data[2] if user_data else 0}\n"
+            f"🔗 Реферер: {user_data[3] if user_data and user_data[3] else 'Нет'}\n\n"
+            f"🕞 <b>Предзаказы:</b>\n"
+        )
         if preorders:
-            for pid, cat_id, qty, total, status, created in preorders[:10]:
+            for pid, cat_id, qty, total, status in preorders[:10]:
                 cat = await fetchone("SELECT name FROM categories WHERE id = ?", (cat_id,))
                 cat_name = cat[0] if cat else "Неизвестно"
-                status_emoji = {"pending": "⏳", "paid": "✅", "expired": "❌", "completed": "🎁"}.get(status, "❓")
-                bot_info += f"   {status_emoji} #{pid} - {cat_name} x{qty} ({total} USDT) - {status}\n"
-            if len(preorders) > 10:
-                bot_info += f"   ... и еще {len(preorders) - 10} предзаказов\n"
+                emoji = {"pending": "⏳", "paid": "✅", "expired": "❌", "completed": "🎁"}.get(status, "❓")
+                bot_info += f"   {emoji} #{pid} - {cat_name} x{qty} ({total} USDT)\n"
         else:
             bot_info += "   Нет предзаказов\n"
-        
-        await message.answer(telegram_info + bot_info, parse_mode="HTML")
-        
+        await message.answer(f"<b>Информация о пользователе</b>\n\n{tg_info}{bot_info}", parse_mode="HTML")
     except Exception as e:
-        logger.error(f"Ошибка при показе информации о пользователе: {e}")
         await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(Command("cancel"))
@@ -2346,9 +1997,8 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
         await state.clear()
         await message.answer("✅ Действие отменено.")
     else:
-        await message.answer("❌ Нет активных действий для отмены.")
+        await message.answer("❌ Нет активных действий.")
 
-# --- КОМАНДА ДЛЯ ПРОВЕРКИ ПРЕДЗАКАЗОВ ПОЛЬЗОВАТЕЛЯ ---
 @dp.message(Command("mypreorders"))
 async def cmd_my_preorders(message: types.Message):
     preorders = await fetchall(
@@ -2357,36 +2007,24 @@ async def cmd_my_preorders(message: types.Message):
         "WHERE p.user_id = ? ORDER BY p.created_at DESC",
         (message.from_user.id,)
     )
-    
     if not preorders:
-        await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> У вас нет предзаказов.', parse_mode="HTML")
+        await message.answer(f'📦 У вас нет предзаказов.')
         return
-    
-    text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CLOCK}">🕞</tg-emoji> <b>Ваши предзаказы:</b>\n\n'
+    text = '🕞 <b>Ваши предзаказы:</b>\n\n'
     for pid, cat_name, qty, total, created, paid_at, status in preorders:
-        if status == "pending":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji>'
-            status_text = "Ожидает оплаты"
-        elif status == "paid":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji>'
-            status_text = "Оплачен, ожидает выдачи"
-        elif status == "expired":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji>'
-            status_text = "Просрочен"
-        elif status == "completed":
-            status_emoji = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_COMPLETED}">🎁</tg-emoji>'
-            status_text = "Выполнен"
-        else:
-            status_emoji = "❓"
-            status_text = "Неизвестно"
-        
-        text += f"{status_emoji} <b>#{pid}</b> - {cat_name}\n"
-        text += f'   <tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> {qty} шт. | <tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> {total} USDT\n'
-        text += f'   <tg-emoji emoji-id="{CustomEmoji.PREORDER_CALENDAR}">📅</tg-emoji> Создан: {created[:10] if created else "Неизвестно"}\n'
+        status_map = {
+            "pending": ("⏳", "Ожидает оплаты"),
+            "paid": ("✅", "Оплачен, ожидает выдачи"),
+            "expired": ("❌", "Просрочен"),
+            "completed": ("🎁", "Выполнен"),
+        }
+        se, st = status_map.get(status, ("❓", "Неизвестно"))
+        text += f"{se} <b>#{pid}</b> - {cat_name}\n"
+        text += f"   📦 {qty} шт. | 💰 {total} USDT\n"
+        text += f"   📅 {created[:10] if created else '—'}\n"
         if paid_at:
-            text += f'   <tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">💳</tg-emoji> Оплачен: {paid_at[:10]}\n'
-        text += f"   {status_emoji} Статус: {status_text}\n\n"
-    
+            text += f"   💳 Оплачен: {paid_at[:10]}\n"
+        text += f"   {se} {st}\n\n"
     await message.answer(text, parse_mode="HTML")
 
 @dp.callback_query(F.data == "back_to_profile")
@@ -2398,17 +2036,16 @@ async def back_to_profile_cb(call: types.CallbackQuery):
 async def back_to_admin_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="📢 Рассылка", callback_data="admin_broadcast")
     kb.button(text="📢 Рассылка с картинкой", callback_data="admin_broadcast_image")
     kb.button(text="💰 Выдать баланс", callback_data="admin_give_balance")
     kb.button(text="📦 Добавить товар", callback_data="admin_add_stock")
+    kb.button(text="📄 Загрузить товары из .txt", callback_data="admin_add_stock_txt")
     kb.button(text="🎫 Создать промокод", callback_data="admin_create_promo")
     kb.button(text="💰 Изменить цену категории", callback_data="admin_change_price")
     kb.button(text="🕞 Предзаказы", callback_data="admin_preorders")
     kb.adjust(2)
-    
     try:
         await call.message.delete()
     except:
@@ -2416,18 +2053,83 @@ async def back_to_admin_cb(call: types.CallbackQuery):
     await call.message.answer("🔧 Панель администратора\nВыберите действие:", reply_markup=kb.as_markup())
     await call.answer()
 
+# --- ОБРАБОТЧИК ДЛЯ /addstock И /done (командная строка) ---
+@dp.message(Command("addstock"))
+async def cmd_add_stock(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    args = message.text.split()
+    if len(args) < 3:
+        await message.answer("❌ Использование: /addstock <cat_id> <количество>")
+        return
+    try:
+        cat_id = int(args[1])
+        count = int(args[2])
+        if count < 1 or count > MAX_BULK_ADD:
+            await message.answer(f"❌ Количество от 1 до {MAX_BULK_ADD}.")
+            return
+    except ValueError:
+        await message.answer("❌ Неверный формат.")
+        return
+    cat = await fetchone("SELECT id, name FROM categories WHERE id = ?", (cat_id,))
+    if not cat:
+        await message.answer(f"❌ Категория {cat_id} не найдена.")
+        return
+    await message.answer(f"📦 <b>Категория: {cat[1]}</b>\n\nОтправляйте товары по одному.\nВведите /done для завершения.", parse_mode="HTML")
+    if not hasattr(bot, 'pending_stock_add'):
+        bot.pending_stock_add = {}
+    bot.pending_stock_add[message.from_user.id] = {
+        'cat_id': cat_id, 'cat_name': cat[1], 'total_count': count, 'items': [], 'current_index': 0
+    }
+
+@dp.message(Command("done"))
+async def cmd_done_add_stock(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not hasattr(bot, 'pending_stock_add') or message.from_user.id not in bot.pending_stock_add:
+        await message.answer("❌ Нет активного процесса. Используйте /addstock")
+        return
+    data = bot.pending_stock_add[message.from_user.id]
+    cat_id = data['cat_id']
+    items = data['items']
+    if not items:
+        await message.answer("❌ Не добавлено ни одного товара.")
+        del bot.pending_stock_add[message.from_user.id]
+        return
+    await message.answer(f"⏳ Сохраняю {len(items)} товаров...")
+    items_to_insert = [(cat_id, item) for item in items]
+    await executemany("INSERT INTO inventory (cat_id, data) VALUES (?, ?)", items_to_insert)
+    await message.answer(f"✅ Добавлено: {len(items)} шт. в категорию {data['cat_name']}", parse_mode="HTML")
+    logger.info(f"Admin added {len(items)} items to category {cat_id}")
+    del bot.pending_stock_add[message.from_user.id]
+
+@dp.message()
+async def handle_add_stock_items(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not hasattr(bot, 'pending_stock_add') or message.from_user.id not in bot.pending_stock_add:
+        return
+    if message.text and message.text.startswith('/'):
+        return
+    data = bot.pending_stock_add[message.from_user.id]
+    items = data['items']
+    total_count = data['total_count']
+    items.append(message.text)
+    bot.pending_stock_add[message.from_user.id]['items'] = items
+    if len(items) < total_count:
+        await message.answer(f"✅ #{len(items)} добавлен! Осталось: {total_count - len(items)}. Или /done для завершения.")
+    else:
+        await message.answer(f"✅ Все {len(items)} товаров получены. Введите /done для сохранения.")
+
 # --- ЗАПУСК ---
 async def main():
     logger.info("Starting bot...")
-    
     try:
         await init_db()
         await setup_catalog()
         asyncio.create_task(cleanup_old_payments())
-        
         if not hasattr(bot, 'user_promos'):
             bot.user_promos = {}
-        
         await bot.set_my_commands([
             BotCommand(command="start", description="Запустить бота"),
             BotCommand(command="help", description="Помощь"),
@@ -2441,24 +2143,20 @@ async def main():
             BotCommand(command="complete_preorder", description="Выдать предзаказ (админ)"),
             BotCommand(command="mypreorders", description="Мои предзаказы"),
         ])
-        
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Bot started successfully!")
         await dp.start_polling(bot)
-        
     except Exception as e:
         logger.error(f"Error in main: {e}")
         raise
     finally:
         logger.info("Shutting down...")
-        await bot.session.close()   
+        await bot.session.close()
         await close_db()
-        
         tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        
         logger.info("Bot stopped")
 
 if __name__ == "__main__":
