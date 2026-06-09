@@ -39,20 +39,23 @@ MAX_CONCURRENT_PAYMENT_CHECKS = 10
 DB_VERSION = 2
 MAX_BULK_ADD = 1000
 
-AGREEMENT_URL = "https://telegra.ph/Pravila-EleghantShopBot-03-26"              
-SUPPORT_URL = "https://t.me/ElegaSupp2_Bot"
+AGREEMENT_URL = "https://telegra.ph/Pravila-EleghantShopBot-03-26"
+SUPPORT_URL = "https://t.me/EleghantSup3_Bot"
+
+# --- РЕЖИМ ТЕХ. РАБОТ ---
+MAINTENANCE_MODE = False
 
 # --- КАСТОМНЫЕ ЭМОДЗИ (ПРЕМИУМ) ---
 class CustomEmoji:
-    CATALOG = "5395444514028529554"
-    PROFILE = "5282843764451195532"
+    CATALOG = "5431646131941556182"
+    PROFILE = "6276264803753266907"
     DEPOSIT = "5316711376876485361"
     HELP = "5420323339723881652"
     PREORDER = "5893102202817352158"
     ACCEPT = "5206607081334906820"
     BACK = "5220070652756635426"
-    CRYPTO_PAY = "5406612507034948020"
-    BALANCE_PAY = "5402186569006210455"
+    CRYPTO_PAY = "5361914370068613491"
+    BALANCE_PAY = "5972185809300753162"
     CHECKMARK = "5895514131896733546"
     GY = "5343742152985839675"
     GY_EMOJI = "5440746682310469677"
@@ -65,8 +68,8 @@ class CustomEmoji:
     PROFILE_EMOJI = "5454156248813432363"
     SHIELD = "5893365724830765382"
     CHECK = "5902002809573740949"
-    LOCK = "5296369303661067030"
-    UP = "5449683594425410231"
+    LOCK = "5224372410395947583"
+    UP = "5208615906258731489"
     TROPHY = "5893376775781617954"
     USER = "5902335789798265487"
     PLUS = "5397916757333654639"
@@ -89,6 +92,7 @@ class CustomEmoji:
     PREORDER_WAIT = "5893102202817352158"
     PREORDER_COMPLETED = "5895514131896733546"
     PIN_EMOJI = "5895440460322706085"
+    BUYKB = "5312057711091813718"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -108,7 +112,7 @@ class UserTrackingMiddleware:
     async def __call__(self, handler, event: types.Update, data: dict):
         user_info = None
         event_type = "unknown"
-        
+
         if event.message and event.message.from_user:
             user_info = event.message.from_user
             event_type = "message"
@@ -121,11 +125,11 @@ class UserTrackingMiddleware:
         elif event.chosen_inline_result and event.chosen_inline_result.from_user:
             user_info = event.chosen_inline_result.from_user
             event_type = "chosen_inline_result"
-        
+
         if user_info:
             user_display = self._format_user_info(user_info)
             action_info = self._get_action_info(event, event_type)
-            
+
             logger.info(f"\n{'='*80}\n"
                        f"👤 ПОЛЬЗОВАТЕЛЬ ВЗАИМОДЕЙСТВУЕТ С БОТОМ\n"
                        f"{'='*80}\n"
@@ -133,11 +137,11 @@ class UserTrackingMiddleware:
                        f"📱 Тип события: {event_type.upper()}\n"
                        f"🎯 Действие: {action_info}\n"
                        f"{'='*80}\n")
-            
+
             await self._save_user_interaction(user_info, event_type, action_info)
-        
+
         return await handler(event, data)
-    
+
     def _format_user_info(self, user: types.User) -> str:
         info = []
         info.append(f"🆔 ID: {user.id}")
@@ -156,7 +160,7 @@ class UserTrackingMiddleware:
         else:
             info.append(f"🔗 Ссылка: tg://user?id={user.id}")
         return "\n".join(info)
-    
+
     def _get_action_info(self, event: types.Update, event_type: str) -> str:
         if event_type == "message" and event.message:
             msg = event.message
@@ -190,7 +194,7 @@ class UserTrackingMiddleware:
         elif event_type == "inline_query" and event.inline_query:
             return f"Inline запрос: {event.inline_query.query[:100]}"
         return "Неизвестное действие"
-    
+
     async def _save_user_interaction(self, user: types.User, event_type: str, action_info: str):
         try:
             log_dir = "user_interactions"
@@ -213,6 +217,59 @@ class UserTrackingMiddleware:
             logger.error(f"Ошибка при сохранении лога взаимодействия: {e}")
 
 dp.update.middleware(UserTrackingMiddleware())
+
+# --- MIDDLEWARE ТЕХ. РАБОТ ---
+class MaintenanceMiddleware:
+    async def __call__(self, handler, event: types.Update, data: dict):
+        global MAINTENANCE_MODE
+        if not MAINTENANCE_MODE:
+            return await handler(event, data)
+
+        user_id = None
+        if event.message and event.message.from_user:
+            user_id = event.message.from_user.id
+        elif event.callback_query and event.callback_query.from_user:
+            user_id = event.callback_query.from_user.id
+
+        # Админ всегда проходит
+        if user_id == ADMIN_ID:
+            return await handler(event, data)
+
+        maintenance_text = (
+            '🛠 <b>Технические работы</b>\n\n'
+            'В данный момент ведутся тех. работы.\n'
+            'Попробуйте зайти позже — скоро всё заработает!'
+        )
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📢 Наш канал", url="https://t.me/EleghantNews")
+        kb.button(text="🆘 Поддержка", url="https://t.me/EleghantSup3_Bot")
+        kb.button(text="🔐 EleghantVPN", url="https://t.me/EleghantVPNRobot")
+        kb.button(text="📄 Пользовательское соглашение", url="https://telegra.ph/Pravila-EleghantShopBot-03-26")
+        kb.adjust(2)
+
+        if event.callback_query:
+            try:
+                await event.callback_query.answer(
+                    "🛠 Ведутся тех. работы. Попробуйте позже.", show_alert=True
+                )
+            except Exception:
+                pass
+            try:
+                await event.callback_query.message.answer(
+                    maintenance_text, parse_mode="HTML", reply_markup=kb.as_markup()
+                )
+            except Exception:
+                pass
+        elif event.message:
+            try:
+                await event.message.answer(
+                    maintenance_text, parse_mode="HTML", reply_markup=kb.as_markup()
+                )
+            except Exception:
+                pass
+        return  # блокируем дальнейшую обработку
+
+dp.update.middleware(MaintenanceMiddleware())
 
 pending_payments: Dict[int, Dict] = {}
 pending_balance_payments: Dict[int, Dict] = {}
@@ -240,10 +297,8 @@ class AdminState(StatesGroup):
     add_stock_count = State()
     add_stock_data = State()
     add_stock_current = State()
-    # ── НОВОЕ: загрузка товаров через .txt ──
     add_stock_txt_cat_id = State()
     add_stock_txt_file = State()
-    # ────────────────────────────────────────
     create_promo_code = State()
     create_promo_type = State()
     create_promo_value = State()
@@ -347,11 +402,11 @@ async def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, amount REAL, from_user_id INTEGER, date TEXT
     )''')
     await conn.execute('''CREATE TABLE IF NOT EXISTS promo_codes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        code TEXT UNIQUE, 
-        amount REAL, 
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE,
+        amount REAL,
         promo_type TEXT DEFAULT 'fixed',
-        max_uses INTEGER, 
+        max_uses INTEGER,
         used INTEGER DEFAULT 0
     )''')
     try:
@@ -711,7 +766,7 @@ async def view_cat_cb(call: types.CallbackQuery):
     kb = InlineKeyboardBuilder()
     if stock_count > 0:
         kb.button(text="🛒 Купить", callback_data=f"buy_{cid}")
-    kb.button(text="🕞 Предзаказ", callback_data=f"preorder_from_cat_{cid}")
+        kb.button(text="⏳ Предзаказ", callback_data=f"preorder_from_cat_{cid}")
     if cat_group == "l0gu_1970":
         kb.button(text="Назад к операторам", callback_data="back_to_l0gu", icon_custom_emoji_id=CustomEmoji.BACK)
     elif cat_group == "gy_1970":
@@ -910,8 +965,8 @@ async def quantity_msg(message: types.Message, state: FSMContext):
     await state.update_data(quantity=qty, total=total, cat_name=cat[0], cid=cid)
     await state.set_state(ShopState.waiting_for_payment_method)
     kb = InlineKeyboardBuilder()
-    kb.button(text="Оплатить CryptoBot", callback_data="pay_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
-    kb.button(text="Оплатить с баланса", callback_data="pay_balance", icon_custom_emoji_id=CustomEmoji.BALANCE_PAY)
+    kb.button(text="Оплатить @send", callback_data="pay_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
+    kb.button(text="Баланс (Кэшбек 3%)", callback_data="pay_balance", icon_custom_emoji_id=CustomEmoji.BALANCE_PAY)
     kb.adjust(1)
     await message.answer(
         f"Вы выбрали {hbold(cat[0])} x{qty}\n"
@@ -1234,11 +1289,11 @@ async def show_main_menu(message: types.Message):
 # АДМИН ПАНЕЛЬ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@dp.message(Command("admintools"))
-async def admin_tools(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
+def build_admin_keyboard() -> InlineKeyboardMarkup:
+    """Строит клавиатуру админки с актуальной кнопкой статуса."""
+    status_btn_text = "🔴 Выключить тех. работы" if MAINTENANCE_MODE else "🟢 Включить тех. работы"
     kb = InlineKeyboardBuilder()
+    kb.button(text=status_btn_text, callback_data="admin_toggle_maintenance")
     kb.button(text="📢 Рассылка", callback_data="admin_broadcast")
     kb.button(text="📢 Рассылка с картинкой", callback_data="admin_broadcast_image")
     kb.button(text="💰 Выдать баланс", callback_data="admin_give_balance")
@@ -1247,11 +1302,49 @@ async def admin_tools(message: types.Message):
     kb.button(text="🎫 Создать промокод", callback_data="admin_create_promo")
     kb.button(text="💰 Изменить цену категории", callback_data="admin_change_price")
     kb.button(text="🕞 Предзаказы", callback_data="admin_preorders")
-    kb.adjust(2)
-    await message.answer("🔧 Панель администратора\nВыберите действие:", reply_markup=kb.as_markup())
+    kb.adjust(1)
+    return kb.as_markup()
+
+@dp.message(Command("admintools"))
+async def admin_tools(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    status_text = "🔴 Тех. работы ВКЛЮЧЕНЫ" if MAINTENANCE_MODE else "🟢 Бот работает в штатном режиме"
+    await message.answer(
+        f"🔧 <b>Панель администратора</b>\n\nСтатус: {status_text}\n\nВыберите действие:",
+        reply_markup=build_admin_keyboard(),
+        parse_mode="HTML"
+    )
+
+# --- ПЕРЕКЛЮЧЕНИЕ РЕЖИМА ТЕХ. РАБОТ ---
+@dp.callback_query(F.data == "admin_toggle_maintenance")
+async def admin_toggle_maintenance(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+    global MAINTENANCE_MODE
+    MAINTENANCE_MODE = not MAINTENANCE_MODE
+    if MAINTENANCE_MODE:
+        status_text = "🔴 Тех. работы <b>ВКЛЮЧЕНЫ</b>\n\nПользователи видят сообщение о тех. работах."
+        logger.info(f"Admin {call.from_user.id} ENABLED maintenance mode")
+    else:
+        status_text = "🟢 Бот <b>работает в штатном режиме</b>\n\nВсе пользователи имеют доступ."
+        logger.info(f"Admin {call.from_user.id} DISABLED maintenance mode")
+    try:
+        await call.message.edit_text(
+            f"🔧 <b>Панель администратора</b>\n\nСтатус: {status_text}\n\nВыберите действие:",
+            reply_markup=build_admin_keyboard(),
+            parse_mode="HTML"
+        )
+    except Exception:
+        await call.message.answer(
+            f"🔧 <b>Панель администратора</b>\n\nСтатус: {status_text}\n\nВыберите действие:",
+            reply_markup=build_admin_keyboard(),
+            parse_mode="HTML"
+        )
+    await call.answer("✅ Статус изменён!")
 
 # ───────────────────────────────────────────────────────────────────────────────
-# РАССЫЛКА — с полным форматированием HTML (жирный, моно, цитата, прем-эмодзи)
+# РАССЫЛКА
 # ───────────────────────────────────────────────────────────────────────────────
 
 BROADCAST_HELP = (
@@ -1308,22 +1401,14 @@ async def admin_broadcast_image_get(message: types.Message, state: FSMContext):
 async def admin_broadcast_send(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-
-    # Берём текст вместе со всеми HTML-entities как есть
-    # message.text — plain text (без разметки)
-    # message.html_text — текст с HTML-тегами (жирный, курсив, моно, прем-эмодзи и т.д.)
-    text = message.html_text  # ← ключевое изменение: используем html_text
+    text = message.html_text
     data = await state.get_data()
     photo_id = data.get('broadcast_photo')
-
-    # Превью перед рассылкой
     preview_kb = InlineKeyboardBuilder()
     preview_kb.button(text="✅ Отправить всем", callback_data="confirm_broadcast")
     preview_kb.button(text="❌ Отменить", callback_data="cancel_broadcast")
     preview_kb.adjust(2)
-
     await state.update_data(broadcast_text=text)
-
     preview_msg = "👁 <b>Предпросмотр рассылки:</b>\n\n"
     if photo_id:
         await message.answer_photo(
@@ -1346,17 +1431,14 @@ async def confirm_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     text = data.get('broadcast_text', '')
     photo_id = data.get('broadcast_photo')
-
     users = await fetchall("SELECT id FROM users WHERE accepted = 1")
     if not users:
         await call.message.edit_text("❌ Нет пользователей для рассылки.")
         await state.clear()
         return
-
     status_msg = await call.message.answer(f"⏳ Начинаю рассылку {len(users)} пользователям...")
     sent = 0
     failed = 0
-
     for idx, (user_id,) in enumerate(users):
         try:
             if photo_id:
@@ -1370,7 +1452,6 @@ async def confirm_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
         except Exception as e:
             failed += 1
             logger.error(f"Ошибка отправки пользователю {user_id}: {e}")
-
     await status_msg.edit_text(f"✅ Рассылка завершена.\nОтправлено: {sent}\nОшибок: {failed}")
     await state.clear()
     await call.answer()
@@ -1384,7 +1465,7 @@ async def cancel_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
 
 # ───────────────────────────────────────────────────────────────────────────────
-# ЗАГРУЗКА ТОВАРОВ ЧЕРЕЗ .TXT (1 строка = 1 товар)
+# ЗАГРУЗКА ТОВАРОВ ЧЕРЕЗ .TXT
 # ───────────────────────────────────────────────────────────────────────────────
 
 @dp.callback_query(F.data == "admin_add_stock_txt")
@@ -1440,40 +1521,30 @@ async def admin_add_stock_txt_file(message: types.Message, state: FSMContext):
     if not doc.file_name or not doc.file_name.lower().endswith('.txt'):
         await message.answer("❌ Файл должен быть в формате .txt")
         return
-    if doc.file_size and doc.file_size > 5 * 1024 * 1024:  # 5 МБ
+    if doc.file_size and doc.file_size > 5 * 1024 * 1024:
         await message.answer("❌ Файл слишком большой (максимум 5 МБ).")
         return
-
     data = await state.get_data()
     cat_id = data['txt_cat_id']
     cat_name = data['txt_cat_name']
-
     status_msg = await message.answer("⏳ Читаю файл...")
-
     try:
         file = await bot.get_file(doc.file_id)
         file_path = file.file_path
-
-        # Скачиваем содержимое файла
         file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
         async with aiohttp.ClientSession() as session:
             async with session.get(file_url) as resp:
                 raw_bytes = await resp.read()
-
-        # Декодируем (пробуем utf-8, потом cp1251)
         try:
             raw_text = raw_bytes.decode('utf-8')
         except UnicodeDecodeError:
             raw_text = raw_bytes.decode('cp1251', errors='replace')
-
         lines = raw_text.splitlines()
-        items = [line.strip() for line in lines if line.strip()]  # убираем пустые строки
-
+        items = [line.strip() for line in lines if line.strip()]
         if not items:
             await status_msg.edit_text("❌ Файл пустой или не содержит валидных строк.")
             await state.clear()
             return
-
         if len(items) > MAX_BULK_ADD:
             await status_msg.edit_text(
                 f"❌ В файле {len(items)} строк, максимум {MAX_BULK_ADD}.\n"
@@ -1481,12 +1552,9 @@ async def admin_add_stock_txt_file(message: types.Message, state: FSMContext):
             )
             await state.clear()
             return
-
         await status_msg.edit_text(f"⏳ Найдено {len(items)} товаров. Сохраняю в базу данных...")
-
         items_to_insert = [(cat_id, item) for item in items]
         await executemany("INSERT INTO inventory (cat_id, data) VALUES (?, ?)", items_to_insert)
-
         await status_msg.edit_text(
             f"✅ <b>Готово!</b>\n\n"
             f"📦 Категория: <b>{cat_name}</b>\n"
@@ -1495,11 +1563,9 @@ async def admin_add_stock_txt_file(message: types.Message, state: FSMContext):
             parse_mode="HTML"
         )
         logger.info(f"Admin {message.from_user.id} uploaded {len(items)} items to category {cat_id} via txt")
-
     except Exception as e:
         logger.error(f"Ошибка при загрузке txt файла: {e}")
         await status_msg.edit_text(f"❌ Ошибка при обработке файла: {e}")
-
     await state.clear()
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -1790,9 +1856,9 @@ async def admin_preorders_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
     preorders = await fetchall("""
-        SELECT p.id, p.user_id, u.username, c.name, p.quantity, p.total, p.created_at, p.paid_at, p.status 
-        FROM preorders p 
-        JOIN categories c ON p.cat_id = c.id 
+        SELECT p.id, p.user_id, u.username, c.name, p.quantity, p.total, p.created_at, p.paid_at, p.status
+        FROM preorders p
+        JOIN categories c ON p.cat_id = c.id
         LEFT JOIN users u ON p.user_id = u.id
         ORDER BY CASE p.status WHEN 'paid' THEN 1 WHEN 'pending' THEN 2 ELSE 3 END, p.created_at DESC
         LIMIT 50
@@ -1842,8 +1908,8 @@ async def admin_complete_preorders_cb(call: types.CallbackQuery):
         return
     preorders = await fetchall("""
         SELECT p.id, p.user_id, p.cat_id, p.quantity, p.total, c.name, u.username
-        FROM preorders p 
-        JOIN categories c ON p.cat_id = c.id 
+        FROM preorders p
+        JOIN categories c ON p.cat_id = c.id
         LEFT JOIN users u ON p.user_id = u.id
         WHERE p.status = 'paid'
         ORDER BY p.created_at ASC
@@ -2036,21 +2102,16 @@ async def back_to_profile_cb(call: types.CallbackQuery):
 async def back_to_admin_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📢 Рассылка", callback_data="admin_broadcast")
-    kb.button(text="📢 Рассылка с картинкой", callback_data="admin_broadcast_image")
-    kb.button(text="💰 Выдать баланс", callback_data="admin_give_balance")
-    kb.button(text="📦 Добавить товар", callback_data="admin_add_stock")
-    kb.button(text="📄 Загрузить товары из .txt", callback_data="admin_add_stock_txt")
-    kb.button(text="🎫 Создать промокод", callback_data="admin_create_promo")
-    kb.button(text="💰 Изменить цену категории", callback_data="admin_change_price")
-    kb.button(text="🕞 Предзаказы", callback_data="admin_preorders")
-    kb.adjust(2)
+    status_text = "🔴 Тех. работы ВКЛЮЧЕНЫ" if MAINTENANCE_MODE else "🟢 Бот работает в штатном режиме"
     try:
         await call.message.delete()
     except:
         pass
-    await call.message.answer("🔧 Панель администратора\nВыберите действие:", reply_markup=kb.as_markup())
+    await call.message.answer(
+        f"🔧 <b>Панель администратора</b>\n\nСтатус: {status_text}\n\nВыберите действие:",
+        reply_markup=build_admin_keyboard(),
+        parse_mode="HTML"
+    )
     await call.answer()
 
 # --- ОБРАБОТЧИК ДЛЯ /addstock И /done (командная строка) ---
