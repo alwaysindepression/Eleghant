@@ -23,7 +23,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 # --- ТОКЕНЫ ---
 BOT_TOKEN = "8768689509:AAE4YMkLYeoZiuM7tGhRmvS2vM5rw-pYsOI"
-CRYPTO_PAY_TOKEN = "582762:AA1avphvfzeVfzPtITaDGr8zEqPdgRXNwtw"
+CRYPTO_PAY_TOKEN = "598185:AApLNI3hDYU9Ykl6mVZ6sw4ZXnx4tZtEHgU"
 ADMIN_ID = 7096591314
 
 # Константы
