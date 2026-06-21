@@ -24,6 +24,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 # --- ТОКЕНЫ ---
 BOT_TOKEN = "8768689509:AAE4YMkLYeoZiuM7tGhRmvS2vM5rw-pYsOI"
 CRYPTO_PAY_TOKEN = "598185:AApLNI3hDYU9Ykl6mVZ6sw4ZXnx4tZtEHgU"
+XROCKET_PAY_TOKEN = "4651fe8e4fa224c3ca95b7592"
 ADMIN_ID = 7096591314
 
 # Константы
@@ -55,6 +56,7 @@ class CustomEmoji:
     ACCEPT = "5206607081334906820"
     BACK = "5220070652756635426"
     CRYPTO_PAY = "5361914370068613491"
+    XROCKET_PAY = "5379612946747921985"
     BALANCE_PAY = "5972185809300753162"
     CHECKMARK = "5895514131896733546"
     GY = "5343742152985839675"
@@ -282,10 +284,12 @@ db_connection = None
 class ShopState(StatesGroup):
     waiting_for_quantity = State()
     waiting_for_payment_method = State()
+    waiting_for_deposit_provider = State()
     waiting_for_deposit_amount = State()
     waiting_for_promo_code = State()
     waiting_for_preorder_category = State()
     waiting_for_preorder_quantity = State()
+    waiting_for_preorder_provider = State()
 
 class AdminState(StatesGroup):
     broadcast_text = State()
@@ -567,68 +571,194 @@ async def crypto_api(method: str, data: dict = None) -> dict:
         await asyncio.sleep(2 ** attempt)
     return {"ok": False, "description": "Max retries exceeded"}
 
+# --- XROCKET PAY API ---
+# Документация: https://pay.xrocket.tg/api  (base URL: https://pay.xrocket.tg)
+# Авторизация через заголовок Rocket-Pay-Key (НЕ Bearer, отличается от CryptoBot).
+# Структура ответа на момент написания кода официально не зафиксирована в общедоступных
+# источниках, поэтому create/get инвойса ниже работают через xrocket_request() с защитным
+# разбором (см. _xrocket_extract_invoice) — при первом реальном вызове в лог попадёт
+# сырой JSON-ответ, и при необходимости разбор подправим за один правкой.
+XROCKET_API_URL = "https://pay.xrocket.tg"
+
+async def xrocket_request(method: str, path: str, json_data: dict = None, params: dict = None) -> dict:
+    headers = {"Rocket-Pay-Key": XROCKET_PAY_TOKEN}
+    url = f"{XROCKET_API_URL}/{path}"
+    timeout = aiohttp.ClientTimeout(total=30)
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(method, url, json=json_data, params=params, headers=headers) as resp:
+                    try:
+                        result = await resp.json()
+                    except Exception:
+                        raw_text = await resp.text()
+                        logger.error(f"xRocket API: не удалось распарсить JSON, status={resp.status}, body={raw_text[:500]}")
+                        if attempt == 2:
+                            return {"ok": False, "description": f"Invalid JSON response (status {resp.status})"}
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    if resp.status >= 400 or result.get('errors') or result.get('error'):
+                        err_msg = result.get('error') or (result.get('errors') or [{}])[0].get('error', 'Unknown error') if isinstance(result, dict) else 'Unknown error'
+                        logger.warning(f"xRocket API error on {path}: {err_msg} | raw={result}")
+                        if attempt == 2:
+                            return {"ok": False, "description": err_msg, "raw": result}
+                    else:
+                        logger.info(f"xRocket API raw response for {path}: {result}")
+                        return {"ok": True, "raw": result}
+        except Exception as e:
+            if attempt == 2:
+                return {"ok": False, "description": str(e)}
+        await asyncio.sleep(2 ** attempt)
+    return {"ok": False, "description": "Max retries exceeded"}
+
+def _xrocket_extract_invoice(raw: dict) -> dict:
+    """
+    Достаёт id/ссылку на оплату/статус из ответа xRocket независимо от того,
+    обёрнут ли реальный объект в {"data": {...}} или возвращён напрямую.
+    Пробует несколько вероятных имён полей, т.к. точная схема ответа
+    не была подтверждена документацией на момент написания.
+    """
+    obj = raw.get('data', raw) if isinstance(raw, dict) else raw
+    if not isinstance(obj, dict):
+        return {}
+    invoice_id = obj.get('id') or obj.get('invoiceId') or obj.get('invoice_id')
+    pay_link = (
+        obj.get('link') or obj.get('payLink') or obj.get('pay_url')
+        or obj.get('url') or obj.get('miniAppInvoiceUrl') or obj.get('webAppInvoiceUrl')
+    )
+    status = obj.get('status') or obj.get('invoiceStatus')
+    paid_amount = obj.get('paidAmount') or obj.get('paid_amount') or 0
+    return {
+        'id': invoice_id,
+        'link': pay_link,
+        'status': status,
+        'paid_amount': paid_amount,
+        'raw': obj,
+    }
+
+async def xrocket_create_invoice(amount: float, description: str, expired_in: int = 1800) -> dict:
+    """
+    Создаёт инвойс на оплату через xRocket Pay в USDT.
+    Возвращает {'ok': True, 'id':..., 'link':...} либо {'ok': False, 'description':...}
+    """
+    res = await xrocket_request("POST", "tg-invoices", json_data={
+        "amount": amount,
+        "numPayments": 1,
+        "currency": "USDT",
+        "description": description,
+        "expiredIn": expired_in,
+    })
+    if not res.get('ok'):
+        return {"ok": False, "description": res.get('description', 'Unknown error')}
+    parsed = _xrocket_extract_invoice(res['raw'])
+    if not parsed.get('id') or not parsed.get('link'):
+        logger.error(f"xRocket: не удалось извлечь id/link из ответа createInvoice: {res['raw']}")
+        return {"ok": False, "description": "Не удалось получить ссылку на оплату от xRocket. Проверьте логи (raw response)."}
+    return {"ok": True, **parsed}
+
+async def xrocket_get_invoice(invoice_id: str) -> dict:
+    res = await xrocket_request("GET", f"tg-invoices/{invoice_id}")
+    if not res.get('ok'):
+        return {"ok": False, "description": res.get('description', 'Unknown error')}
+    parsed = _xrocket_extract_invoice(res['raw'])
+    return {"ok": True, **parsed}
+
+def _xrocket_is_paid(status: Optional[str], paid_amount) -> bool:
+    """xRocket может присылать статус как 'paid'/'PAID' либо обозначать оплату через paidAmount."""
+    if status and str(status).lower() == 'paid':
+        return True
+    try:
+        return float(paid_amount or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+def _xrocket_is_expired(status: Optional[str]) -> bool:
+    return bool(status) and str(status).lower() in ('expired', 'cancelled', 'canceled')
+
 # --- ПРОВЕРКА ОПЛАТЫ ---
-async def check_deposit_payment(invoice_id: int, user_id: int, amount: float, msg_to_edit: types.Message):
+async def check_deposit_payment(invoice_id, user_id: int, amount: float, msg_to_edit: types.Message, provider: str = "crypto"):
     async with payment_check_semaphore:
         for attempt in range(PAYMENT_CHECK_ATTEMPTS):
             await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
             if invoice_id not in pending_balance_payments:
                 return
-            res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
-            if res.get('ok') and res['result'].get('items'):
-                inv = res['result']['items'][0]
-                if inv['status'] == 'paid':
-                    await update_balance(user_id, amount, "deposit")
-                    del pending_balance_payments[invoice_id]
-                    await bot.send_message(user_id, f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Баланс успешно пополнен на {amount} USDT!', parse_mode="HTML")
-                    try:
-                        await msg_to_edit.delete()
-                    except:
-                        pass
-                    return
-                elif inv['status'] == 'expired':
-                    await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен. Попробуйте снова.', parse_mode="HTML")
-                    del pending_balance_payments[invoice_id]
-                    return
+            if provider == "xrocket":
+                inv = await xrocket_get_invoice(str(invoice_id))
+                if not inv.get('ok'):
+                    continue
+                is_paid = _xrocket_is_paid(inv.get('status'), inv.get('paid_amount'))
+                is_expired = _xrocket_is_expired(inv.get('status'))
+            else:
+                res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
+                if not (res.get('ok') and res['result'].get('items')):
+                    continue
+                cb_inv = res['result']['items'][0]
+                is_paid = cb_inv['status'] == 'paid'
+                is_expired = cb_inv['status'] == 'expired'
+
+            if is_paid:
+                await update_balance(user_id, amount, "deposit")
+                del pending_balance_payments[invoice_id]
+                await bot.send_message(user_id, f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Баланс успешно пополнен на {amount} USDT!', parse_mode="HTML")
+                try:
+                    await msg_to_edit.delete()
+                except:
+                    pass
+                return
+            elif is_expired:
+                await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен. Попробуйте снова.', parse_mode="HTML")
+                del pending_balance_payments[invoice_id]
+                return
         if invoice_id in pending_balance_payments:
             await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Время ожидания истекло. Если вы оплатили, обратитесь в поддержку.', parse_mode="HTML")
             del pending_balance_payments[invoice_id]
 
-async def auto_check_payment(invoice_id: int, user_id: int, cat_id: int, quantity: int,
-                            msg_to_edit: types.Message, total_cost: float):
+async def auto_check_payment(invoice_id, user_id: int, cat_id: int, quantity: int,
+                            msg_to_edit: types.Message, total_cost: float, provider: str = "crypto"):
     async with payment_check_semaphore:
         for attempt in range(PAYMENT_CHECK_ATTEMPTS):
             await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
             if invoice_id not in pending_payments:
                 return
-            res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
-            if res.get('ok') and res['result'].get('items'):
-                inv = res['result']['items'][0]
-                if inv['status'] == 'paid':
-                    items = await buy_items_with_transaction(cat_id, quantity, user_id, total_cost)
-                    if not items:
-                        await bot.send_message(user_id, f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Товар закончился во время оплаты. Обратитесь в поддержку.', parse_mode="HTML")
-                        del pending_payments[invoice_id]
-                        return
-                    res_text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Оплата подтверждена!\n\n<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">🎁</tg-emoji> Ваш товар:\n'
-                    for _, i_data in items:
-                        res_text += f"• `{i_data}`\n"
-                    await bot.send_message(user_id, res_text, parse_mode="Markdown")
-                    try:
-                        await msg_to_edit.delete()
-                    except:
-                        pass
-                    referrer = await fetchone("SELECT referrer_id FROM users WHERE id = ?", (user_id,))
-                    if referrer and referrer[0]:
-                        ref_bonus = round(total_cost * 0.1, 2)
-                        await add_referral_earning(referrer[0], ref_bonus, user_id)
-                        await bot.send_message(referrer[0], f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Вы получили {ref_bonus} USDT (10%) от покупки!', parse_mode="HTML")
+            if provider == "xrocket":
+                inv = await xrocket_get_invoice(str(invoice_id))
+                if not inv.get('ok'):
+                    continue
+                is_paid = _xrocket_is_paid(inv.get('status'), inv.get('paid_amount'))
+                is_expired = _xrocket_is_expired(inv.get('status'))
+            else:
+                res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
+                if not (res.get('ok') and res['result'].get('items')):
+                    continue
+                cb_inv = res['result']['items'][0]
+                is_paid = cb_inv['status'] == 'paid'
+                is_expired = cb_inv['status'] == 'expired'
+
+            if is_paid:
+                items = await buy_items_with_transaction(cat_id, quantity, user_id, total_cost)
+                if not items:
+                    await bot.send_message(user_id, f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Товар закончился во время оплаты. Обратитесь в поддержку.', parse_mode="HTML")
                     del pending_payments[invoice_id]
                     return
-                elif inv['status'] == 'expired':
-                    await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен. Создайте новый заказ.', parse_mode="HTML")
-                    del pending_payments[invoice_id]
-                    return
+                res_text = f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Оплата подтверждена!\n\n<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">🎁</tg-emoji> Ваш товар:\n'
+                for _, i_data in items:
+                    res_text += f"• `{i_data}`\n"
+                await bot.send_message(user_id, res_text, parse_mode="Markdown")
+                try:
+                    await msg_to_edit.delete()
+                except:
+                    pass
+                referrer = await fetchone("SELECT referrer_id FROM users WHERE id = ?", (user_id,))
+                if referrer and referrer[0]:
+                    ref_bonus = round(total_cost * 0.1, 2)
+                    await add_referral_earning(referrer[0], ref_bonus, user_id)
+                    await bot.send_message(referrer[0], f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Вы получили {ref_bonus} USDT (10%) от покупки!', parse_mode="HTML")
+                del pending_payments[invoice_id]
+                return
+            elif is_expired:
+                await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен. Создайте новый заказ.', parse_mode="HTML")
+                del pending_payments[invoice_id]
+                return
         if invoice_id in pending_payments:
             await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Время автоматической проверки истекло. Обратитесь в поддержку.', parse_mode="HTML")
             del pending_payments[invoice_id]
@@ -698,9 +828,13 @@ async def text_profile(message: types.Message):
 
 @dp.message(F.text == "Пополнить баланс")
 async def text_deposit(message: types.Message, state: FSMContext):
-    await state.set_state(ShopState.waiting_for_deposit_amount)
-    text = f'<tg-emoji emoji-id="{CustomEmoji.DEPOSIT}">💰</tg-emoji> <b>Пополнение баланса</b>\n\nВведите сумму пополнения в USDT (минимум 1 USDT):'
-    await send_with_image(message, 'EleghantBalance', text)
+    await state.set_state(ShopState.waiting_for_deposit_provider)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Оплатить @CryptoBot", callback_data="deposit_provider_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
+    kb.button(text="Оплатить @xRocket", callback_data="deposit_provider_xrocket", icon_custom_emoji_id=CustomEmoji.XROCKET_PAY)
+    kb.adjust(1)
+    text = f'<tg-emoji emoji-id="{CustomEmoji.DEPOSIT}">💰</tg-emoji> <b>Пополнение баланса</b>\n\nВыберите способ оплаты:'
+    await send_with_image(message, 'EleghantBalance', text, kb.as_markup())
 
 @dp.message(F.text == "Помощь")
 async def text_help(message: types.Message):
@@ -812,31 +946,73 @@ async def preorder_quantity_msg(message: types.Message, state: FSMContext):
     cat_name = data['preorder_cat_name']
     price = data['preorder_price']
     total = round(price * qty, 2)
+    await state.update_data(preorder_qty=qty, preorder_total=total)
+    await state.set_state(ShopState.waiting_for_preorder_provider)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Оплатить @CryptoBot", callback_data="preorder_pay_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
+    kb.button(text="Оплатить @xRocket", callback_data="preorder_pay_xrocket", icon_custom_emoji_id=CustomEmoji.XROCKET_PAY)
+    kb.adjust(1)
+    await message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> {cat_name} x{qty}\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total} USDT\n\n'
+        f'Выберите способ оплаты:',
+        reply_markup=kb.as_markup(), parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data.in_({"preorder_pay_crypto", "preorder_pay_xrocket"}), ShopState.waiting_for_preorder_provider)
+async def preorder_pay_provider_cb(call: types.CallbackQuery, state: FSMContext):
+    provider = "xrocket" if call.data == "preorder_pay_xrocket" else "crypto"
+    data = await state.get_data()
+    cat_id = data['preorder_cat_id']
+    cat_name = data['preorder_cat_name']
+    qty = data['preorder_qty']
+    total = data['preorder_total']
+    user_id = call.from_user.id
+
     await execute_query(
         "INSERT INTO preorders (user_id, cat_id, quantity, total, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (message.from_user.id, cat_id, qty, total, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "pending"),
+        (user_id, cat_id, qty, total, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "pending"),
         commit=True
     )
     preorder = await fetchone("SELECT id FROM preorders WHERE user_id = ? AND cat_id = ? ORDER BY id DESC LIMIT 1",
-                              (message.from_user.id, cat_id))
+                              (user_id, cat_id))
     preorder_id = preorder[0] if preorder else None
-    inv = await crypto_api("createInvoice", {
-        "asset": "USDT", "amount": str(total),
-        "description": f"Предзаказ: {cat_name} x{qty}", "expires_in": 3600
-    })
-    if not inv.get('ok'):
-        await message.answer(f"⚠ Ошибка API: {inv.get('description', 'Неизвестная ошибка')}")
-        await state.clear()
-        return
-    invoice_id = inv['result']['invoice_id']
+
+    if provider == "xrocket":
+        inv = await xrocket_create_invoice(
+            amount=total, description=f"Предзаказ: {cat_name} x{qty}", expired_in=3600
+        )
+        if not inv.get('ok'):
+            await call.message.answer(f"⚠ Ошибка API xRocket: {inv.get('description', 'Неизвестная ошибка')}")
+            await state.clear()
+            await call.answer()
+            return
+        invoice_id = inv['id']
+        pay_url = inv['link']
+        provider_emoji = CustomEmoji.XROCKET_PAY
+    else:
+        inv = await crypto_api("createInvoice", {
+            "asset": "USDT", "amount": str(total),
+            "description": f"Предзаказ: {cat_name} x{qty}", "expires_in": 3600
+        })
+        if not inv.get('ok'):
+            await call.message.answer(f"⚠ Ошибка API: {inv.get('description', 'Неизвестная ошибка')}")
+            await state.clear()
+            await call.answer()
+            return
+        invoice_id = inv['result']['invoice_id']
+        pay_url = inv['result']['pay_url']
+        provider_emoji = CustomEmoji.CRYPTO_PAY
+
     pending_payments[invoice_id] = {
-        'user_id': message.from_user.id, 'cat_id': cat_id, 'quantity': qty,
-        'total': total, 'created_at': datetime.now(), 'is_preorder': True, 'preorder_id': preorder_id
+        'user_id': user_id, 'cat_id': cat_id, 'quantity': qty,
+        'total': total, 'created_at': datetime.now(), 'is_preorder': True,
+        'preorder_id': preorder_id, 'provider': provider
     }
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Оплатить предзаказ", url=inv['result']['pay_url'], icon_custom_emoji_id=CustomEmoji.CHECKMARK)
+    kb.button(text="✅ Оплатить предзаказ", url=pay_url, icon_custom_emoji_id=provider_emoji)
     kb.adjust(1)
-    msg = await message.answer(
+    msg = await call.message.answer(
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CLOCK}">🕞</tg-emoji> <b>Предзаказ оформлен!</b>\n\n'
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> Товар: {cat_name}\n'
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_SETTINGS}">🔢</tg-emoji> Количество: {qty} шт.\n'
@@ -845,42 +1021,55 @@ async def preorder_quantity_msg(message: types.Message, state: FSMContext):
         reply_markup=kb.as_markup(), parse_mode="HTML"
     )
     pending_payments[invoice_id]['msg'] = msg
-    asyncio.create_task(auto_check_preorder_payment(invoice_id, message.from_user.id, cat_id, qty, msg, total, cat_name, preorder_id))
+    asyncio.create_task(auto_check_preorder_payment(invoice_id, user_id, cat_id, qty, msg, total, cat_name, preorder_id, provider))
     await state.clear()
+    await call.answer()
 
-async def auto_check_preorder_payment(invoice_id: int, user_id: int, cat_id: int, quantity: int,
-                                      msg_to_edit: types.Message, total_cost: float, cat_name: str, preorder_id: int = None):
+async def auto_check_preorder_payment(invoice_id, user_id: int, cat_id: int, quantity: int,
+                                      msg_to_edit: types.Message, total_cost: float, cat_name: str,
+                                      preorder_id: int = None, provider: str = "crypto"):
     async with payment_check_semaphore:
         for attempt in range(PAYMENT_CHECK_ATTEMPTS):
             await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
             if invoice_id not in pending_payments:
                 return
-            res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
-            if res.get('ok') and res['result'].get('items'):
-                inv = res['result']['items'][0]
-                if inv['status'] == 'paid':
-                    if preorder_id:
-                        await execute_query("UPDATE preorders SET status = 'paid', paid_at = ? WHERE id = ?",
-                                          (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), preorder_id), commit=True)
-                    del pending_payments[invoice_id]
-                    await bot.send_message(user_id,
-                        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Предзаказ оплачен!</b>\n\n'
-                        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> Товар: {cat_name}\n'
-                        f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total_cost} USDT\n\n'
-                        f'Как только товар появится, он будет автоматически выдан вам.',
-                        parse_mode="HTML"
-                    )
-                    try:
-                        await msg_to_edit.delete()
-                    except:
-                        pass
-                    return
-                elif inv['status'] == 'expired':
-                    if preorder_id:
-                        await execute_query("UPDATE preorders SET status = 'expired' WHERE id = ?", (preorder_id,), commit=True)
-                    await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен.', parse_mode="HTML")
-                    del pending_payments[invoice_id]
-                    return
+            if provider == "xrocket":
+                inv = await xrocket_get_invoice(str(invoice_id))
+                if not inv.get('ok'):
+                    continue
+                is_paid = _xrocket_is_paid(inv.get('status'), inv.get('paid_amount'))
+                is_expired = _xrocket_is_expired(inv.get('status'))
+            else:
+                res = await crypto_api("getInvoices", {"invoice_ids": str(invoice_id)})
+                if not (res.get('ok') and res['result'].get('items')):
+                    continue
+                cb_inv = res['result']['items'][0]
+                is_paid = cb_inv['status'] == 'paid'
+                is_expired = cb_inv['status'] == 'expired'
+
+            if is_paid:
+                if preorder_id:
+                    await execute_query("UPDATE preorders SET status = 'paid', paid_at = ? WHERE id = ?",
+                                      (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), preorder_id), commit=True)
+                del pending_payments[invoice_id]
+                await bot.send_message(user_id,
+                    f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Предзаказ оплачен!</b>\n\n'
+                    f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> Товар: {cat_name}\n'
+                    f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total_cost} USDT\n\n'
+                    f'Как только товар появится, он будет автоматически выдан вам.',
+                    parse_mode="HTML"
+                )
+                try:
+                    await msg_to_edit.delete()
+                except:
+                    pass
+                return
+            elif is_expired:
+                if preorder_id:
+                    await execute_query("UPDATE preorders SET status = 'expired' WHERE id = ?", (preorder_id,), commit=True)
+                await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Счет просрочен.', parse_mode="HTML")
+                del pending_payments[invoice_id]
+                return
         if invoice_id in pending_payments:
             if preorder_id:
                 await execute_query("UPDATE preorders SET status = 'expired' WHERE id = ?", (preorder_id,), commit=True)
@@ -965,7 +1154,8 @@ async def quantity_msg(message: types.Message, state: FSMContext):
     await state.update_data(quantity=qty, total=total, cat_name=cat[0], cid=cid)
     await state.set_state(ShopState.waiting_for_payment_method)
     kb = InlineKeyboardBuilder()
-    kb.button(text="Оплатить @send", callback_data="pay_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
+    kb.button(text="Оплатить @CryptoBot", callback_data="pay_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
+    kb.button(text="Оплатить @xRocket", callback_data="pay_xrocket", icon_custom_emoji_id=CustomEmoji.XROCKET_PAY)
     kb.button(text="Баланс (Кэшбек 3%)", callback_data="pay_balance", icon_custom_emoji_id=CustomEmoji.BALANCE_PAY)
     kb.adjust(1)
     await message.answer(
@@ -996,7 +1186,7 @@ async def pay_crypto_cb(call: types.CallbackQuery, state: FSMContext):
     invoice_id = inv['result']['invoice_id']
     pending_payments[invoice_id] = {
         'user_id': user_id, 'cat_id': cid, 'quantity': quantity,
-        'total': total, 'created_at': datetime.now(), 'is_preorder': False
+        'total': total, 'created_at': datetime.now(), 'is_preorder': False, 'provider': 'crypto'
     }
     kb = InlineKeyboardBuilder()
     kb.button(text="Оплатить", url=inv['result']['pay_url'], icon_custom_emoji_id=CustomEmoji.CHECKMARK)
@@ -1008,7 +1198,43 @@ async def pay_crypto_cb(call: types.CallbackQuery, state: FSMContext):
         reply_markup=kb.as_markup(), parse_mode="HTML"
     )
     pending_payments[invoice_id]['msg'] = msg
-    asyncio.create_task(auto_check_payment(invoice_id, user_id, cid, quantity, msg, total))
+    asyncio.create_task(auto_check_payment(invoice_id, user_id, cid, quantity, msg, total, 'crypto'))
+    await state.clear()
+    await call.answer()
+
+@dp.callback_query(F.data == "pay_xrocket")
+async def pay_xrocket_cb(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    cid = data['cid']
+    quantity = data['quantity']
+    total = data['total']
+    cat_name = data['cat_name']
+    user_id = call.from_user.id
+    inv = await xrocket_create_invoice(
+        amount=total,
+        description=f"{cat_name} x{quantity}",
+        expired_in=1800
+    )
+    if not inv.get('ok'):
+        await call.message.answer(f"⚠ Ошибка API xRocket: {inv.get('description', 'Неизвестная ошибка')}")
+        await state.clear()
+        return
+    invoice_id = inv['id']
+    pending_payments[invoice_id] = {
+        'user_id': user_id, 'cat_id': cid, 'quantity': quantity,
+        'total': total, 'created_at': datetime.now(), 'is_preorder': False, 'provider': 'xrocket'
+    }
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Оплатить", url=inv['link'], icon_custom_emoji_id=CustomEmoji.XROCKET_PAY)
+    kb.adjust(1)
+    msg = await call.message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> {cat_name} — {quantity} шт.\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: {total} USDT\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> Счет действителен 30 минут\n\nНажмите кнопку ниже для оплаты:',
+        reply_markup=kb.as_markup(), parse_mode="HTML"
+    )
+    pending_payments[invoice_id]['msg'] = msg
+    asyncio.create_task(auto_check_payment(invoice_id, user_id, cid, quantity, msg, total, 'xrocket'))
     await state.clear()
     await call.answer()
 
@@ -1203,6 +1429,19 @@ async def promo_code_activate(message: types.Message, state: FSMContext):
     await state.clear()
 
 # --- ПОПОЛНЕНИЕ БАЛАНСА ---
+@dp.callback_query(F.data.in_({"deposit_provider_crypto", "deposit_provider_xrocket"}), ShopState.waiting_for_deposit_provider)
+async def deposit_provider_cb(call: types.CallbackQuery, state: FSMContext):
+    provider = "xrocket" if call.data == "deposit_provider_xrocket" else "crypto"
+    provider_name = "@xRocket" if provider == "xrocket" else "@CryptoBot"
+    await state.update_data(deposit_provider=provider)
+    await state.set_state(ShopState.waiting_for_deposit_amount)
+    await call.message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.DEPOSIT}">💰</tg-emoji> Оплата через {provider_name}\n\n'
+        f'Введите сумму пополнения в USDT (минимум 1 USDT):',
+        parse_mode="HTML"
+    )
+    await call.answer()
+
 @dp.message(ShopState.waiting_for_deposit_amount)
 async def deposit_amount(message: types.Message, state: FSMContext):
     try:
@@ -1212,25 +1451,49 @@ async def deposit_amount(message: types.Message, state: FSMContext):
         amount = round(amount, 2)
     except:
         return await message.answer("❌ Введите число.")
-    inv = await crypto_api("createInvoice", {
-        "asset": "USDT", "amount": str(amount),
-        "description": f"Пополнение баланса пользователя {message.from_user.id}", "expires_in": 1800
-    })
-    if not inv.get('ok'):
-        await message.answer(f"⚠ Ошибка API: {inv.get('description', 'Неизвестная ошибка')}")
-        await state.clear()
-        return
-    invoice_id = inv['result']['invoice_id']
-    pending_balance_payments[invoice_id] = {'user_id': message.from_user.id, 'amount': amount, 'created_at': datetime.now()}
+
+    data = await state.get_data()
+    provider = data.get('deposit_provider', 'crypto')
+
+    if provider == "xrocket":
+        inv = await xrocket_create_invoice(
+            amount=amount,
+            description=f"Пополнение баланса пользователя {message.from_user.id}",
+            expired_in=1800
+        )
+        if not inv.get('ok'):
+            await message.answer(f"⚠ Ошибка API xRocket: {inv.get('description', 'Неизвестная ошибка')}")
+            await state.clear()
+            return
+        invoice_id = inv['id']
+        pay_url = inv['link']
+        provider_emoji = CustomEmoji.XROCKET_PAY
+    else:
+        inv = await crypto_api("createInvoice", {
+            "asset": "USDT", "amount": str(amount),
+            "description": f"Пополнение баланса пользователя {message.from_user.id}", "expires_in": 1800
+        })
+        if not inv.get('ok'):
+            await message.answer(f"⚠ Ошибка API: {inv.get('description', 'Неизвестная ошибка')}")
+            await state.clear()
+            return
+        invoice_id = inv['result']['invoice_id']
+        pay_url = inv['result']['pay_url']
+        provider_emoji = CustomEmoji.CRYPTO_PAY
+
+    pending_balance_payments[invoice_id] = {
+        'user_id': message.from_user.id, 'amount': amount,
+        'created_at': datetime.now(), 'provider': provider
+    }
     kb = InlineKeyboardBuilder()
-    kb.button(text="Оплатить", url=inv['result']['pay_url'], icon_custom_emoji_id=CustomEmoji.CHECKMARK)
+    kb.button(text="Оплатить", url=pay_url, icon_custom_emoji_id=provider_emoji)
     kb.adjust(1)
     msg = await message.answer(
         f'<tg-emoji emoji-id="{CustomEmoji.DEPOSIT}">💰</tg-emoji> Пополнение баланса\nСумма: {amount} USDT\n\nНажмите кнопку ниже для оплаты:',
         reply_markup=kb.as_markup(), parse_mode="HTML"
     )
     pending_balance_payments[invoice_id]['msg'] = msg
-    asyncio.create_task(check_deposit_payment(invoice_id, message.from_user.id, amount, msg))
+    asyncio.create_task(check_deposit_payment(invoice_id, message.from_user.id, amount, msg, provider))
     await state.clear()
 
 # --- КОМАНДЫ ---
