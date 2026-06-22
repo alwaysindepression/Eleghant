@@ -22,7 +22,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 # --- ТОКЕНЫ ---
-BOT_TOKEN = "8768689509:AAE4YMkLYeoZiuM7tGhRmvS2vM5rw-pYsOI"
+BOT_TOKEN = "8997022199:AAHcRUGG7k3C7VZXGLM1s2uxQnd4dcCc5ls"
 CRYPTO_PAY_TOKEN = "598185:AApLNI3hDYU9Ykl6mVZ6sw4ZXnx4tZtEHgU"
 XROCKET_PAY_TOKEN = "4651fe8e4fa224c3ca95b7592"
 ADMIN_ID = 7096591314
@@ -95,6 +95,7 @@ class CustomEmoji:
     PREORDER_COMPLETED = "5895514131896733546"
     PIN_EMOJI = "5895440460322706085"
     BUYKB = "5312057711091813718"
+    WITHDRAW = "5409048419211682843"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -233,7 +234,6 @@ class MaintenanceMiddleware:
         elif event.callback_query and event.callback_query.from_user:
             user_id = event.callback_query.from_user.id
 
-        # Админ всегда проходит
         if user_id == ADMIN_ID:
             return await handler(event, data)
 
@@ -269,7 +269,7 @@ class MaintenanceMiddleware:
                 )
             except Exception:
                 pass
-        return  # блокируем дальнейшую обработку
+        return
 
 dp.update.middleware(MaintenanceMiddleware())
 
@@ -290,6 +290,8 @@ class ShopState(StatesGroup):
     waiting_for_preorder_category = State()
     waiting_for_preorder_quantity = State()
     waiting_for_preorder_provider = State()
+    waiting_for_withdraw_amount = State()
+    waiting_for_withdraw_confirm = State()
 
 class AdminState(StatesGroup):
     broadcast_text = State()
@@ -309,6 +311,7 @@ class AdminState(StatesGroup):
     create_promo_limit = State()
     change_price_category = State()
     change_price_value = State()
+    withdraw_reject_reason = State()
 
 # --- КЛАВИАТУРА ГЛАВНОГО МЕНЮ ---
 def main_keyboard() -> ReplyKeyboardMarkup:
@@ -420,12 +423,24 @@ async def init_db():
     await conn.execute('''CREATE TABLE IF NOT EXISTS balance_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, operation TEXT, date TEXT, admin_id INTEGER DEFAULT NULL
     )''')
+    # --- ТАБЛИЦА ЗАЯВОК НА ВЫВОД ---
+    await conn.execute('''CREATE TABLE IF NOT EXISTS withdraw_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        username TEXT,
+        amount REAL,
+        status TEXT DEFAULT 'pending',
+        created_at TEXT,
+        processed_at TEXT DEFAULT NULL,
+        admin_note TEXT DEFAULT NULL
+    )''')
     await conn.commit()
     try:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_inventory_cat_id ON inventory(cat_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_history_user_id ON history(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_preorders_user_id ON preorders(user_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_withdraw_user_id ON withdraw_requests(user_id)")
         await conn.commit()
     except:
         pass
@@ -572,12 +587,6 @@ async def crypto_api(method: str, data: dict = None) -> dict:
     return {"ok": False, "description": "Max retries exceeded"}
 
 # --- XROCKET PAY API ---
-# Документация: https://pay.xrocket.tg/api  (base URL: https://pay.xrocket.tg)
-# Авторизация через заголовок Rocket-Pay-Key (НЕ Bearer, отличается от CryptoBot).
-# Структура ответа на момент написания кода официально не зафиксирована в общедоступных
-# источниках, поэтому create/get инвойса ниже работают через xrocket_request() с защитным
-# разбором (см. _xrocket_extract_invoice) — при первом реальном вызове в лог попадёт
-# сырой JSON-ответ, и при необходимости разбор подправим за один правкой.
 XROCKET_API_URL = "https://pay.xrocket.tg"
 
 async def xrocket_request(method: str, path: str, json_data: dict = None, params: dict = None) -> dict:
@@ -612,12 +621,6 @@ async def xrocket_request(method: str, path: str, json_data: dict = None, params
     return {"ok": False, "description": "Max retries exceeded"}
 
 def _xrocket_extract_invoice(raw: dict) -> dict:
-    """
-    Достаёт id/ссылку на оплату/статус из ответа xRocket независимо от того,
-    обёрнут ли реальный объект в {"data": {...}} или возвращён напрямую.
-    Пробует несколько вероятных имён полей, т.к. точная схема ответа
-    не была подтверждена документацией на момент написания.
-    """
     obj = raw.get('data', raw) if isinstance(raw, dict) else raw
     if not isinstance(obj, dict):
         return {}
@@ -637,10 +640,6 @@ def _xrocket_extract_invoice(raw: dict) -> dict:
     }
 
 async def xrocket_create_invoice(amount: float, description: str, expired_in: int = 1800) -> dict:
-    """
-    Создаёт инвойс на оплату через xRocket Pay в USDT.
-    Возвращает {'ok': True, 'id':..., 'link':...} либо {'ok': False, 'description':...}
-    """
     res = await xrocket_request("POST", "tg-invoices", json_data={
         "amount": amount,
         "numPayments": 1,
@@ -664,7 +663,6 @@ async def xrocket_get_invoice(invoice_id: str) -> dict:
     return {"ok": True, **parsed}
 
 def _xrocket_is_paid(status: Optional[str], paid_amount) -> bool:
-    """xRocket может присылать статус как 'paid'/'PAID' либо обозначать оплату через paidAmount."""
     if status and str(status).lower() == 'paid':
         return True
     try:
@@ -1300,8 +1298,364 @@ async def show_profile_with_image(user_id: int, target_message: types.Message):
     kb.button(text="Реферальная ссылка", callback_data="profile_referral", icon_custom_emoji_id=CustomEmoji.USER)
     kb.button(text="Промокод", callback_data="profile_promo", icon_custom_emoji_id=CustomEmoji.PROMO)
     kb.button(text="Мои предзаказы", callback_data="profile_preorders", icon_custom_emoji_id=CustomEmoji.PREORDER_CLOCK)
+    kb.button(text="Вывод средств", callback_data="profile_withdraw", icon_custom_emoji_id=CustomEmoji.WITHDRAW)
     kb.adjust(1)
     await send_with_image(target_message, 'EleghantProfile', text, kb.as_markup())
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# СИСТЕМА ВЫВОДА СРЕДСТВ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "profile_withdraw")
+async def profile_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    balance = await get_balance(user_id)
+
+    if balance <= 0:
+        await call.answer(
+            "❌ На вашем балансе недостаточно средств для вывода.",
+            show_alert=True
+        )
+        return
+
+    await state.set_state(ShopState.waiting_for_withdraw_amount)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="cancel_withdraw")
+    kb.adjust(1)
+    await call.message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💸</tg-emoji> <b>Вывод средств</b>\n\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.LOCK}">🔒</tg-emoji> Ваш баланс: <b>{balance} USDT</b>\n\n'
+        f'Введите сумму для вывода (минимум 1 USDT):',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+@dp.message(ShopState.waiting_for_withdraw_amount)
+async def withdraw_amount_msg(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    balance = await get_balance(user_id)
+
+    try:
+        amount = float(message.text.replace(',', '.'))
+        if amount <= 0:
+            raise ValueError
+        amount = round(amount, 2)
+    except (ValueError, AttributeError):
+        await message.answer(
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите корректную сумму (например: 10 или 5.50)',
+            parse_mode="HTML"
+        )
+        return
+
+    if amount < 1:
+        await message.answer(
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Минимальная сумма вывода — <b>1 USDT</b>.',
+            parse_mode="HTML"
+        )
+        return
+
+    if amount > balance:
+        await message.answer(
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> <b>Недостаточно средств!</b>\n\n'
+            f'Ваш баланс: <b>{balance} USDT</b>\n'
+            f'Запрошено: <b>{amount} USDT</b>\n\n'
+            f'Пожалуйста, введите сумму не превышающую баланс.',
+            parse_mode="HTML"
+        )
+        return
+
+    await state.update_data(withdraw_amount=amount)
+    await state.set_state(ShopState.waiting_for_withdraw_confirm)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Да, вывести", callback_data="confirm_withdraw")
+    kb.button(text="❌ Отмена", callback_data="cancel_withdraw")
+    kb.adjust(2)
+
+    await message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.QUESTION}">❓</tg-emoji> <b>Подтверждение вывода</b>\n\n'
+        f'Вы уверены, что хотите вывести <b>{amount} USDT</b>?\n\n'
+        f'После подтверждения заявка будет отправлена администратору.',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+
+@dp.callback_query(F.data == "confirm_withdraw", ShopState.waiting_for_withdraw_confirm)
+async def confirm_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    data = await state.get_data()
+    amount = data.get('withdraw_amount', 0)
+
+    # Повторная проверка баланса перед созданием заявки
+    balance = await get_balance(user_id)
+    if amount > balance:
+        await call.message.edit_text(
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Недостаточно средств на балансе. '
+            f'Текущий баланс: {balance} USDT.',
+            parse_mode="HTML"
+        )
+        await state.clear()
+        await call.answer()
+        return
+
+    username = call.from_user.username or ""
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Сохраняем заявку в БД
+    await execute_query(
+        "INSERT INTO withdraw_requests (user_id, username, amount, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (user_id, username, amount, now_str),
+        commit=True
+    )
+    request_row = await fetchone(
+        "SELECT id FROM withdraw_requests WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    )
+    request_id = request_row[0] if request_row else "?"
+
+    # Уведомляем пользователя
+    await call.message.edit_text(
+        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Заявка создана!</b>\n\n'
+        f'Администрация рассмотрит её в ближайшее время.\n\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма вывода: <b>{amount} USDT</b>\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> Номер заявки: <b>#{request_id}</b>',
+        parse_mode="HTML"
+    )
+
+    # Уведомляем администратора
+    user_link = f"@{username}" if username else f"<a href='tg://user?id={user_id}'>ID: {user_id}</a>"
+    admin_text = (
+        f'💸 <b>Новая заявка на вывод #{request_id}</b>\n\n'
+        f'👤 Пользователь: {user_link}\n'
+        f'🆔 ID: <code>{user_id}</code>\n'
+        f'💰 Сумма: <b>{amount} USDT</b>\n'
+        f'📅 Дата: {now_str[:16]}'
+    )
+    admin_kb = InlineKeyboardBuilder()
+    admin_kb.button(text="✅ Одобрить", callback_data=f"withdraw_approve_{request_id}")
+    admin_kb.button(text="❌ Отклонить", callback_data=f"withdraw_reject_{request_id}")
+    admin_kb.adjust(2)
+
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            admin_text,
+            parse_mode="HTML",
+            reply_markup=admin_kb.as_markup()
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить администратора о заявке #{request_id}: {e}")
+
+    await state.clear()
+    await call.answer()
+
+@dp.callback_query(F.data == "cancel_withdraw")
+async def cancel_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text(
+        f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Вывод средств отменён.',
+        parse_mode="HTML"
+    )
+    await call.answer()
+
+# --- ОБРАБОТКА ЗАЯВОК НА ВЫВОД АДМИНИСТРАТОРОМ ---
+
+@dp.callback_query(F.data.startswith("withdraw_approve_"))
+async def withdraw_approve_cb(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        await call.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    try:
+        request_id = int(call.data.split("_")[2])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка", show_alert=True)
+        return
+
+    request = await fetchone(
+        "SELECT user_id, username, amount, status FROM withdraw_requests WHERE id = ?",
+        (request_id,)
+    )
+    if not request:
+        await call.message.edit_text(f"❌ Заявка #{request_id} не найдена.")
+        await call.answer()
+        return
+
+    user_id, username, amount, status = request
+
+    if status != 'pending':
+        await call.answer(f"⚠️ Заявка уже обработана (статус: {status})", show_alert=True)
+        return
+
+    # Проверяем баланс пользователя
+    balance = await get_balance(user_id)
+    if balance < amount:
+        await call.message.edit_text(
+            f"❌ У пользователя недостаточно средств!\n"
+            f"Баланс: {balance} USDT, заявка: {amount} USDT\n\n"
+            f"Заявка #{request_id} отклонена автоматически."
+        )
+        await execute_query(
+            "UPDATE withdraw_requests SET status = 'rejected', processed_at = ?, admin_note = ? WHERE id = ?",
+            (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "Недостаточно средств", request_id),
+            commit=True
+        )
+        await call.answer()
+        return
+
+    # Списываем с баланса
+    await update_balance(user_id, -amount, "withdraw", ADMIN_ID)
+
+    # Обновляем статус заявки
+    await execute_query(
+        "UPDATE withdraw_requests SET status = 'approved', processed_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), request_id),
+        commit=True
+    )
+
+    user_link = f"@{username}" if username else f"ID: {user_id}"
+    await call.message.edit_text(
+        f'✅ <b>Заявка #{request_id} одобрена</b>\n\n'
+        f'👤 Пользователь: {user_link}\n'
+        f'💰 Сумма: {amount} USDT\n'
+        f'💳 Баланс списан.',
+        parse_mode="HTML"
+    )
+
+    # Уведомляем пользователя
+    try:
+        await bot.send_message(
+            user_id,
+            f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Ваша заявка на вывод одобрена!</b>\n\n'
+            f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: <b>{amount} USDT</b>\n\n'
+            f'Средства будут переведены вам в ближайшее время. По вопросам обращайтесь в поддержку.',
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {user_id} об одобрении заявки: {e}")
+
+    await call.answer("✅ Заявка одобрена, баланс списан!")
+    logger.info(f"Admin {call.from_user.id} approved withdraw #{request_id} for user {user_id}, amount {amount} USDT")
+
+@dp.callback_query(F.data.startswith("withdraw_reject_"))
+async def withdraw_reject_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        await call.answer("❌ Нет доступа", show_alert=True)
+        return
+
+    try:
+        request_id = int(call.data.split("_")[2])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка", show_alert=True)
+        return
+
+    request = await fetchone(
+        "SELECT user_id, username, amount, status FROM withdraw_requests WHERE id = ?",
+        (request_id,)
+    )
+    if not request:
+        await call.message.edit_text(f"❌ Заявка #{request_id} не найдена.")
+        await call.answer()
+        return
+
+    user_id, username, amount, status = request
+
+    if status != 'pending':
+        await call.answer(f"⚠️ Заявка уже обработана (статус: {status})", show_alert=True)
+        return
+
+    await state.update_data(reject_request_id=request_id, reject_user_id=user_id,
+                            reject_username=username, reject_amount=amount)
+    await state.set_state(AdminState.withdraw_reject_reason)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Пропустить причину", callback_data=f"withdraw_reject_noreason_{request_id}")
+    kb.adjust(1)
+
+    await call.message.answer(
+        f'❌ <b>Отклонение заявки #{request_id}</b>\n\n'
+        f'Введите причину отклонения (или нажмите кнопку, чтобы пропустить):',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+@dp.message(AdminState.withdraw_reject_reason)
+async def withdraw_reject_reason_msg(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    request_id = data['reject_request_id']
+    user_id = data['reject_user_id']
+    username = data['reject_username']
+    amount = data['reject_amount']
+    reason = message.text.strip()
+    await _do_reject_withdraw(request_id, user_id, username, amount, reason, state, message)
+
+@dp.callback_query(F.data.startswith("withdraw_reject_noreason_"))
+async def withdraw_reject_noreason_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    request_id = data.get('reject_request_id')
+    user_id = data.get('reject_user_id')
+    username = data.get('reject_username', '')
+    amount = data.get('reject_amount', 0)
+    await _do_reject_withdraw(request_id, user_id, username, amount, None, state, call.message)
+    await call.answer()
+
+async def _do_reject_withdraw(request_id, user_id, username, amount, reason, state, message_obj):
+    note = reason if reason else "Без причины"
+    await execute_query(
+        "UPDATE withdraw_requests SET status = 'rejected', processed_at = ?, admin_note = ? WHERE id = ?",
+        (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), note, request_id),
+        commit=True
+    )
+    user_link = f"@{username}" if username else f"ID: {user_id}"
+    await message_obj.answer(
+        f'❌ <b>Заявка #{request_id} отклонена</b>\n\n'
+        f'👤 Пользователь: {user_link}\n'
+        f'💰 Сумма: {amount} USDT\n'
+        f'📝 Причина: {note}',
+        parse_mode="HTML"
+    )
+    reason_text = f'\n📝 Причина: {reason}' if reason else ''
+    try:
+        await bot.send_message(
+            user_id,
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> <b>Ваша заявка на вывод отклонена.</b>\n\n'
+            f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💰</tg-emoji> Сумма: <b>{amount} USDT</b>'
+            f'{reason_text}\n\n'
+            f'Ваш баланс не изменился. По вопросам обращайтесь в поддержку.',
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {user_id} об отклонении заявки: {e}")
+    logger.info(f"Withdraw #{request_id} rejected for user {user_id}, reason: {note}")
+    await state.clear()
+
+# --- КОМАНДА ПРОСМОТРА ЗАЯВОК НА ВЫВОД (АДМИН) ---
+@dp.message(Command("withdraws"))
+async def cmd_withdraws(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    requests = await fetchall(
+        "SELECT id, user_id, username, amount, status, created_at FROM withdraw_requests "
+        "WHERE status = 'pending' ORDER BY created_at ASC"
+    )
+    if not requests:
+        await message.answer("📭 Нет активных заявок на вывод.")
+        return
+    text = f'💸 <b>Активные заявки на вывод ({len(requests)}):</b>\n\n'
+    for rid, uid, uname, amount, status, created in requests:
+        u = f"@{uname}" if uname else f"ID:{uid}"
+        text += f"#{rid} | {u} | {amount} USDT | {created[:16]}\n"
+    await message.answer(text, parse_mode="HTML")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# КОНЕЦ СИСТЕМЫ ВЫВОДА
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "profile_preorders")
 async def profile_preorders_cb(call: types.CallbackQuery):
@@ -1553,7 +1907,6 @@ async def show_main_menu(message: types.Message):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def build_admin_keyboard() -> InlineKeyboardMarkup:
-    """Строит клавиатуру админки с актуальной кнопкой статуса."""
     status_btn_text = "🔴 Выключить тех. работы" if MAINTENANCE_MODE else "🟢 Включить тех. работы"
     kb = InlineKeyboardBuilder()
     kb.button(text=status_btn_text, callback_data="admin_toggle_maintenance")
@@ -1565,6 +1918,7 @@ def build_admin_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🎫 Создать промокод", callback_data="admin_create_promo")
     kb.button(text="💰 Изменить цену категории", callback_data="admin_change_price")
     kb.button(text="🕞 Предзаказы", callback_data="admin_preorders")
+    kb.button(text="💸 Заявки на вывод", callback_data="admin_withdraws")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1579,7 +1933,6 @@ async def admin_tools(message: types.Message):
         parse_mode="HTML"
     )
 
-# --- ПЕРЕКЛЮЧЕНИЕ РЕЖИМА ТЕХ. РАБОТ ---
 @dp.callback_query(F.data == "admin_toggle_maintenance")
 async def admin_toggle_maintenance(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
@@ -1605,6 +1958,82 @@ async def admin_toggle_maintenance(call: types.CallbackQuery):
             parse_mode="HTML"
         )
     await call.answer("✅ Статус изменён!")
+
+# --- ЗАЯВКИ НА ВЫВОД В АДМИНКЕ ---
+@dp.callback_query(F.data == "admin_withdraws")
+async def admin_withdraws_cb(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+    requests = await fetchall(
+        "SELECT id, user_id, username, amount, status, created_at FROM withdraw_requests "
+        "WHERE status = 'pending' ORDER BY created_at ASC LIMIT 20"
+    )
+    if not requests:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🔙 Назад", callback_data="back_to_admin", icon_custom_emoji_id=CustomEmoji.BACK)
+        try:
+            await call.message.delete()
+        except:
+            pass
+        await call.message.answer(
+            "💸 <b>Заявки на вывод</b>\n\n📭 Активных заявок нет.",
+            parse_mode="HTML",
+            reply_markup=kb.as_markup()
+        )
+        await call.answer()
+        return
+
+    text = f'💸 <b>Активные заявки на вывод ({len(requests)}):</b>\n\n'
+    for rid, uid, uname, amount, status, created in requests:
+        u = f"@{uname}" if uname else f"ID:{uid}"
+        text += f"<b>#{rid}</b> | {u} | <b>{amount} USDT</b> | {created[:16]}\n"
+
+    kb = InlineKeyboardBuilder()
+    for rid, uid, uname, amount, status, created in requests:
+        kb.button(text=f"#{rid} — {amount} USDT", callback_data=f"admin_withdraw_detail_{rid}")
+    kb.button(text="🔙 Назад", callback_data="back_to_admin", icon_custom_emoji_id=CustomEmoji.BACK)
+    kb.adjust(1)
+
+    try:
+        await call.message.delete()
+    except:
+        pass
+    await call.message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("admin_withdraw_detail_"))
+async def admin_withdraw_detail_cb(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+    try:
+        request_id = int(call.data.split("_")[3])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    request = await fetchone(
+        "SELECT id, user_id, username, amount, status, created_at FROM withdraw_requests WHERE id = ?",
+        (request_id,)
+    )
+    if not request:
+        await call.answer("❌ Заявка не найдена", show_alert=True)
+        return
+    rid, uid, uname, amount, status, created = request
+    u = f"@{uname}" if uname else f"ID:{uid}"
+    text = (
+        f'💸 <b>Заявка #{rid}</b>\n\n'
+        f'👤 Пользователь: {u}\n'
+        f'🆔 ID: <code>{uid}</code>\n'
+        f'💰 Сумма: <b>{amount} USDT</b>\n'
+        f'📅 Дата: {created[:16]}\n'
+        f'📊 Статус: {status}'
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Одобрить", callback_data=f"withdraw_approve_{rid}")
+    kb.button(text="❌ Отклонить", callback_data=f"withdraw_reject_{rid}")
+    kb.button(text="🔙 К списку заявок", callback_data="admin_withdraws")
+    kb.adjust(2)
+    await call.message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    await call.answer()
 
 # ───────────────────────────────────────────────────────────────────────────────
 # РАССЫЛКА
@@ -2257,6 +2686,8 @@ async def show_user_stats(message: types.Message):
         total_preorders = await fetchone("SELECT COUNT(*) FROM preorders")
         paid_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE status = 'paid'")
         completed_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE status = 'completed'")
+        pending_withdraws = await fetchone("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'")
+        total_withdrawn = await fetchone("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved'")
         text = (
             f'📊 <b>Статистика бота</b>\n\n'
             f"👥 Пользователей: {total_users[0] if total_users else 0}\n"
@@ -2264,7 +2695,9 @@ async def show_user_stats(message: types.Message):
             f"💰 Баланс пользователей: {total_balance[0] if total_balance else 0} USDT\n\n"
             f"🕞 Всего предзаказов: {total_preorders[0] if total_preorders else 0}\n"
             f"✅ Оплаченных: {paid_preorders[0] if paid_preorders else 0}\n"
-            f"🎁 Выполненных: {completed_preorders[0] if completed_preorders else 0}"
+            f"🎁 Выполненных: {completed_preorders[0] if completed_preorders else 0}\n\n"
+            f"💸 Заявок на вывод (pending): {pending_withdraws[0] if pending_withdraws else 0}\n"
+            f"💸 Выведено всего: {total_withdrawn[0] if total_withdrawn and total_withdrawn[0] else 0} USDT"
         )
         await message.answer(text, parse_mode="HTML")
     except Exception as e:
@@ -2288,6 +2721,10 @@ async def show_user_info(message: types.Message):
         balance = await get_balance(target_user_id)
         preorders = await fetchall(
             "SELECT id, cat_id, quantity, total, status FROM preorders WHERE user_id = ? ORDER BY id DESC",
+            (target_user_id,)
+        )
+        withdraws = await fetchall(
+            "SELECT id, amount, status, created_at FROM withdraw_requests WHERE user_id = ? ORDER BY id DESC LIMIT 5",
             (target_user_id,)
         )
         try:
@@ -2315,6 +2752,11 @@ async def show_user_info(message: types.Message):
                 bot_info += f"   {emoji} #{pid} - {cat_name} x{qty} ({total} USDT)\n"
         else:
             bot_info += "   Нет предзаказов\n"
+        if withdraws:
+            bot_info += "\n💸 <b>Заявки на вывод:</b>\n"
+            for wid, wamount, wstatus, wcreated in withdraws:
+                emoji = {"pending": "⏳", "approved": "✅", "rejected": "❌"}.get(wstatus, "❓")
+                bot_info += f"   {emoji} #{wid} — {wamount} USDT ({wcreated[:10]})\n"
         await message.answer(f"<b>Информация о пользователе</b>\n\n{tg_info}{bot_info}", parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
@@ -2466,6 +2908,7 @@ async def main():
             BotCommand(command="addstock", description="Добавить товар (админ)"),
             BotCommand(command="complete_preorder", description="Выдать предзаказ (админ)"),
             BotCommand(command="mypreorders", description="Мои предзаказы"),
+            BotCommand(command="withdraws", description="Заявки на вывод (админ)"),
         ])
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Bot started successfully!")
