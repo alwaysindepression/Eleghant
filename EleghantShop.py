@@ -22,7 +22,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 # --- ТОКЕНЫ ---
-BOT_TOKEN = "8997022199:AAHcRUGG7k3C7VZXGLM1s2uxQnd4dcCc5ls"
+BOT_TOKEN = "8768689509:AAE4YMkLYeoZiuM7tGhRmvS2vM5rw-pYsOI"
 CRYPTO_PAY_TOKEN = "598185:AApLNI3hDYU9Ykl6mVZ6sw4ZXnx4tZtEHgU"
 XROCKET_PAY_TOKEN = "4651fe8e4fa224c3ca95b7592"
 ADMIN_ID = 7096591314
