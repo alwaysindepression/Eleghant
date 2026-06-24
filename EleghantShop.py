@@ -3,8 +3,9 @@ import aiosqlite
 import logging
 import aiohttp
 import html
-import os
 import time
+import os
+from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple, List, Any
 from contextlib import asynccontextmanager
@@ -21,11 +22,19 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
-# --- ТОКЕНЫ ---
-BOT_TOKEN = "8768689509:AAF-C5ReWNINAKkU0Wk2-L1BIcRic0ny714"
-CRYPTO_PAY_TOKEN = "598185:AAHWTNcImGcL7cxUS1UCwyTFRabgug2GzPL"
-XROCKET_PAY_TOKEN = "76035d2c60c05dff6c10d7364"
-ADMIN_ID = 7096591314
+# --- ТОКЕНЫ (из переменных окружения) ---
+load_dotenv()
+
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Отсутствует переменная окружения {name}. Проверьте файл .env")
+    return value
+
+BOT_TOKEN = _require_env("BOT_TOKEN")
+CRYPTO_PAY_TOKEN = _require_env("CRYPTO_PAY_TOKEN")
+XROCKET_PAY_TOKEN = _require_env("XROCKET_PAY_TOKEN")
+ADMIN_ID = int(_require_env("ADMIN_ID"))
 
 # Константы
 PAYMENT_CHECK_INTERVAL = 10
@@ -41,7 +50,7 @@ DB_VERSION = 2
 MAX_BULK_ADD = 1000
 
 AGREEMENT_URL = "https://telegra.ph/Pravila-EleghantShopBot-03-26"
-SUPPORT_URL = "https://t.me/EleghantSup3_Bot"
+SUPPORT_URL = "https://t.me/EleghantSupp_Bot"
 
 # --- РЕЖИМ ТЕХ. РАБОТ ---
 MAINTENANCE_MODE = False
