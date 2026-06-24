@@ -1,11 +1,14 @@
+import os
+from dotenv import load_dotenv  # ← импорт есть
+
+load_dotenv()
+
 import asyncio
 import aiosqlite
 import logging
 import aiohttp
 import html
 import time
-import os
-from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple, List, Any
 from contextlib import asynccontextmanager
@@ -23,8 +26,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 # --- ТОКЕНЫ (из переменных окружения) ---
-load_dotenv()
-
 def _require_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
