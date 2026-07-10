@@ -1,20 +1,29 @@
+import sys
+import io
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 import os
-from dotenv import load_dotenv  # ← импорт есть
-
-load_dotenv()
-
 import asyncio
 import aiosqlite
 import logging
 import aiohttp
 import html
 import time
+
+
+
+import base64
+import json
+import pyotp
+
+
+
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple, List, Any
 from contextlib import asynccontextmanager
 from asyncio import Semaphore
 from functools import lru_cache, wraps
-
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, BotCommand, FSInputFile
@@ -25,17 +34,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
-# --- ТОКЕНЫ (из переменных окружения) ---
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"Отсутствует переменная окружения {name}. Проверьте файл .env")
-    return value
-
-BOT_TOKEN = _require_env("BOT_TOKEN")
-CRYPTO_PAY_TOKEN = _require_env("CRYPTO_PAY_TOKEN")
-XROCKET_PAY_TOKEN = _require_env("XROCKET_PAY_TOKEN")
-ADMIN_ID = int(_require_env("ADMIN_ID"))
+BOT_TOKEN = ''
+CRYPTO_PAY_TOKEN = ''
+XROCKET_PAY_TOKEN = ''
+ADMIN_ID = 7096591314
 
 # Константы
 PAYMENT_CHECK_INTERVAL = 10
@@ -50,8 +52,8 @@ MAX_CONCURRENT_PAYMENT_CHECKS = 10
 DB_VERSION = 2
 MAX_BULK_ADD = 1000
 
-AGREEMENT_URL = "https://telegra.ph/Pravila-EleghantShopBot-03-26"
-SUPPORT_URL = "https://t.me/EleghantSupp_Bot"
+AGREEMENT_URL = "https://telegra.ph/Pravila-EleghantShopRobot-06-27"
+SUPPORT_URL = "https://t.me/EleghantSupportBot"
 
 # --- РЕЖИМ ТЕХ. РАБОТ ---
 MAINTENANCE_MODE = False
@@ -59,24 +61,24 @@ MAINTENANCE_MODE = False
 # --- КАСТОМНЫЕ ЭМОДЗИ (ПРЕМИУМ) ---
 class CustomEmoji:
     CATALOG = "5431646131941556182"
-    PROFILE = "6276264803753266907"
-    DEPOSIT = "5316711376876485361"
-    HELP = "5420323339723881652"
-    PREORDER = "5893102202817352158"
+    PROFILE = "5275979556308674886"
+    DEPOSIT = "5276398496008663230"
+    HELP = "5276240711795107620"
+    PREORDER = "5278540791336165644"
     ACCEPT = "5206607081334906820"
-    BACK = "5220070652756635426"
+    BACK = "5206510891247371052"
     CRYPTO_PAY = "5361914370068613491"
     XROCKET_PAY = "5379612946747921985"
     BALANCE_PAY = "5972185809300753162"
     CHECKMARK = "5895514131896733546"
     GY = "5343742152985839675"
-    GY_EMOJI = "5440746682310469677"
+    GY_EMOJI = "5438434014220264821"
     MTS = "5262690652616931769"
     MEGAFON = "5470134961673612788"
     BEELINE = "5469796926272580161"
     YOTA = "5469769180783849063"
     T2 = "5440552665752820072"
-    GUN = "5226443873122808829"
+    GUN = "5278753302023004775"
     PROFILE_EMOJI = "5454156248813432363"
     SHIELD = "5893365724830765382"
     CHECK = "5902002809573740949"
@@ -92,7 +94,7 @@ class CustomEmoji:
     QUESTION = "5436113877181941026"
     DIAMOND = "5427168083074628963"
     PIN = "5397782960512444700"
-    SUPPORT = "5444965061749644170"
+    SUPPORT = "5276240711795107620"
     TIME = "5316575093269214796"
     HISTORY = "5395444784611480792"
     PREORDER_CLOCK = "5893102202817352158"
@@ -106,6 +108,10 @@ class CustomEmoji:
     PIN_EMOJI = "5895440460322706085"
     BUYKB = "5312057711091813718"
     WITHDRAW = "5409048419211682843"
+    BUYTAG = "5278613311858959074"
+    PREORDERCHECK = "5278540791336165644"
+    EDIT = "5276395476646653290"
+    TOTP = "5276220667182736079"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -254,9 +260,9 @@ class MaintenanceMiddleware:
         )
         kb = InlineKeyboardBuilder()
         kb.button(text="📢 Наш канал", url="https://t.me/EleghantNews")
-        kb.button(text="🆘 Поддержка", url="https://t.me/EleghantSup3_Bot")
+        kb.button(text="🆘 Поддержка", url="https://t.me/EleghantSupportBot")
         kb.button(text="🔐 EleghantVPN", url="https://t.me/EleghantVPNRobot")
-        kb.button(text="📄 Пользовательское соглашение", url="https://telegra.ph/Pravila-EleghantShopBot-03-26")
+        kb.button(text="📄 Пользовательское соглашение", url="https://telegra.ph/Pravila-EleghantShopRobot-06-27")
         kb.adjust(2)
 
         if event.callback_query:
@@ -293,6 +299,7 @@ db_connection = None
 # --- СОСТОЯНИЯ ---
 class ShopState(StatesGroup):
     waiting_for_quantity = State()
+    waiting_for_custom_quantity = State()
     waiting_for_payment_method = State()
     waiting_for_deposit_provider = State()
     waiting_for_deposit_amount = State()
@@ -302,11 +309,17 @@ class ShopState(StatesGroup):
     waiting_for_preorder_provider = State()
     waiting_for_withdraw_amount = State()
     waiting_for_withdraw_confirm = State()
+    # Состояния для TOTP
+    waiting_for_totp_name = State()
+    waiting_for_totp_secret = State()
 
 class AdminState(StatesGroup):
     broadcast_text = State()
     broadcast_with_image = State()
     broadcast_image = State()
+    broadcast_ask_button = State()   
+    broadcast_button_text = State()
+    broadcast_button_url = State()
     give_balance_user_id = State()
     give_balance_amount = State()
     add_stock_cat_id = State()
@@ -322,6 +335,12 @@ class AdminState(StatesGroup):
     change_price_category = State()
     change_price_value = State()
     withdraw_reject_reason = State()
+    change_desc_category = State()
+    change_desc_value = State()
+    search_user_username = State()
+    ban_user_id = State()
+    ban_user_reason = State()
+    unban_user_id = State()
 
 # --- КЛАВИАТУРА ГЛАВНОГО МЕНЮ ---
 def main_keyboard() -> ReplyKeyboardMarkup:
@@ -330,7 +349,14 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     deposit_btn = KeyboardButton(text="Пополнить баланс", icon_custom_emoji_id=CustomEmoji.DEPOSIT)
     help_btn = KeyboardButton(text="Помощь", icon_custom_emoji_id=CustomEmoji.HELP)
     preorder_btn = KeyboardButton(text="Предзаказ", icon_custom_emoji_id=CustomEmoji.PREORDER)
-    kb = [[catalog_btn], [profile_btn, deposit_btn], [help_btn, preorder_btn]]
+    totp_btn = KeyboardButton(text="ТОТР-Ключи", icon_custom_emoji_id=CustomEmoji.TOTP)
+    # 4 ряда: 1-й ряд - Каталог, 2-й ряд - Профиль + Пополнить баланс, 3-й ряд - Помощь + Предзаказ, 4-й ряд - ТОТР-Ключи
+    kb = [
+        [catalog_btn],
+        [profile_btn, deposit_btn],
+        [help_btn, preorder_btn],
+        [totp_btn]
+    ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 # --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ С КАРТИНКОЙ ---
@@ -394,8 +420,18 @@ async def init_db():
     conn = await get_db()
     await conn.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY, accepted INTEGER DEFAULT 0, total INTEGER DEFAULT 0,
-        username TEXT, referrer_id INTEGER DEFAULT NULL
+        username TEXT, referrer_id INTEGER DEFAULT NULL, is_banned INTEGER DEFAULT 0,
+        ban_reason TEXT DEFAULT NULL, banned_at TEXT DEFAULT NULL
     )''')
+    for col, definition in [
+        ("is_banned", "INTEGER DEFAULT 0"),
+        ("ban_reason", "TEXT DEFAULT NULL"),
+        ("banned_at", "TEXT DEFAULT NULL"),
+    ]:
+        try:
+            await conn.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+        except Exception:
+            pass
     await conn.execute('''CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, desc TEXT, price REAL, cat_group TEXT DEFAULT ''
     )''')
@@ -428,12 +464,18 @@ async def init_db():
     )''')
     try:
         await conn.execute("ALTER TABLE promo_codes ADD COLUMN promo_type TEXT DEFAULT 'fixed'")
-    except:
+    except Exception:
         pass
+    await conn.execute('''CREATE TABLE IF NOT EXISTS promo_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT,
+        user_id INTEGER,
+        username TEXT,
+        used_at TEXT
+    )''')
     await conn.execute('''CREATE TABLE IF NOT EXISTS balance_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, operation TEXT, date TEXT, admin_id INTEGER DEFAULT NULL
     )''')
-    # --- ТАБЛИЦА ЗАЯВОК НА ВЫВОД ---
     await conn.execute('''CREATE TABLE IF NOT EXISTS withdraw_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -444,6 +486,15 @@ async def init_db():
         processed_at TEXT DEFAULT NULL,
         admin_note TEXT DEFAULT NULL
     )''')
+    # Таблица для TOTP-ключей
+    await conn.execute('''CREATE TABLE IF NOT EXISTS totp_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        name TEXT,
+        secret TEXT,
+        created_at TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
     await conn.commit()
     try:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_inventory_cat_id ON inventory(cat_id)")
@@ -451,8 +502,10 @@ async def init_db():
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_preorders_user_id ON preorders(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_withdraw_user_id ON withdraw_requests(user_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_promo_usage_code ON promo_usage(code)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_totp_keys_user_id ON totp_keys(user_id)")
         await conn.commit()
-    except:
+    except Exception:
         pass
     logger.info("Database initialized")
 
@@ -538,6 +591,43 @@ async def save_user(username: str, user_id: int, referrer_id: int = None):
         if referrer_id:
             await execute_query("INSERT INTO referrals (referrer_id, referral_id, date) VALUES (?, ?, ?)",
                                (referrer_id, user_id, datetime.now(timezone.utc).strftime("%d.%m %H:%M")), commit=True)
+
+async def is_user_banned(user_id: int) -> bool:
+    row = await fetchone("SELECT is_banned FROM users WHERE id = ?", (user_id,))
+    return bool(row and row[0])
+
+# --- MIDDLEWARE ДЛЯ БАНА ---
+class BanCheckMiddleware:
+    async def __call__(self, handler, event: types.Update, data: dict):
+        user_id = None
+        if event.message and event.message.from_user:
+            user_id = event.message.from_user.id
+        elif event.callback_query and event.callback_query.from_user:
+            user_id = event.callback_query.from_user.id
+
+        if user_id and user_id != ADMIN_ID:
+            if await is_user_banned(user_id):
+                ban_info = await fetchone("SELECT ban_reason FROM users WHERE id = ?", (user_id,))
+                reason = ban_info[0] if ban_info and ban_info[0] else "Причина не указана"
+                ban_text = (
+                    f'🚫 <b>Вы заблокированы</b>\n\n'
+                    f'Причина: {reason}\n\n'
+                    f'Для обжалования обратитесь в поддержку.'
+                )
+                if event.callback_query:
+                    try:
+                        await event.callback_query.answer("🚫 Вы заблокированы.", show_alert=True)
+                    except Exception:
+                        pass
+                elif event.message:
+                    try:
+                        await event.message.answer(ban_text, parse_mode="HTML")
+                    except Exception:
+                        pass
+                return
+        return await handler(event, data)
+
+dp.update.middleware(BanCheckMiddleware())
 
 # --- ФУНКЦИЯ ПОКУПКИ С ТРАНЗАКЦИЕЙ ---
 async def buy_items_with_transaction(cat_id: int, quantity: int, user_id: int, total: float) -> Optional[List[tuple]]:
@@ -710,7 +800,7 @@ async def check_deposit_payment(invoice_id, user_id: int, amount: float, msg_to_
                 await bot.send_message(user_id, f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Баланс успешно пополнен на {amount} USDT!', parse_mode="HTML")
                 try:
                     await msg_to_edit.delete()
-                except:
+                except Exception:
                     pass
                 return
             elif is_expired:
@@ -754,7 +844,7 @@ async def auto_check_payment(invoice_id, user_id: int, cat_id: int, quantity: in
                 await bot.send_message(user_id, res_text, parse_mode="Markdown")
                 try:
                     await msg_to_edit.delete()
-                except:
+                except Exception:
                     pass
                 referrer = await fetchone("SELECT referrer_id FROM users WHERE id = ?", (user_id,))
                 if referrer and referrer[0]:
@@ -771,7 +861,7 @@ async def auto_check_payment(invoice_id, user_id: int, cat_id: int, quantity: in
             await msg_to_edit.edit_text(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> Время автоматической проверки истекло. Обратитесь в поддержку.', parse_mode="HTML")
             del pending_payments[invoice_id]
 
-# --- ФОН ЗАДАЧИ ---
+# --- ФОНОВАЯ ЗАДАЧА ---
 async def cleanup_old_payments():
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL)
@@ -820,12 +910,35 @@ async def show_categories_group(call: types.CallbackQuery, group_key: str):
     await send_with_image(call.message, 'EleghantCatalog', text, kb.as_markup())
     await call.answer()
 
-# --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
+# --- ПОКАЗ КНОПОК ВЫБОРА КОЛИЧЕСТВА ---
+async def show_quantity_keyboard(message: types.Message, cid: int, cat_name: str, price: float, stock_count: int):
+    presets = [1, 3, 5, 10]
+    kb = InlineKeyboardBuilder()
+    for qty in presets:
+        total = round(price * qty, 2)
+        btn_text = f"{qty} шт. — ${total}"
+        kb.button(text=btn_text, callback_data=f"qty_{cid}_{qty}")
+    kb.button(text="Ввести своё число", callback_data=f"qty_custom_{cid}", icon_custom_emoji_id=CustomEmoji.EDIT)
+    kb.button(text="Назад", callback_data=f"view_{cid}", icon_custom_emoji_id=CustomEmoji.BACK)
+    kb.adjust(2, 2, 1, 1)
+    await message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.QUESTION}">❓</tg-emoji> <b>Выберите количество:</b>\n\n'
+        f'Товар: <b>{cat_name}</b>\n'
+        f'Цена: <b>{price} USDT/шт</b>\n'
+        f'В наличии: <b>{stock_count} шт.</b>',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ОБРАБОТЧИКИ СООБЩЕНИЙ
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @dp.message(F.text == "Каталог")
 async def text_catalog(message: types.Message):
     kb = InlineKeyboardBuilder()
-    kb.button(text="GY 1970+", callback_data="group_gy", icon_custom_emoji_id=CustomEmoji.GY)
-    kb.button(text="Л0гu 1960+, все операторы", callback_data="group_l0gu", icon_custom_emoji_id=CustomEmoji.MEGAFON)
+    kb.button(text="GY 1970+",callback_data="group_gy",icon_custom_emoji_id=CustomEmoji.GY,style="primary")
+    kb.button( text="Л0гu 1960+, все операторы", callback_data="group_l0gu", icon_custom_emoji_id=CustomEmoji.MEGAFON, style="success" )
     kb.adjust(1)
     text = f'<tg-emoji emoji-id="{CustomEmoji.GUN}">☝️</tg-emoji> <b>Каталог товаров</b>\n\nВыберите интересующий вас раздел:'
     await send_with_image(message, 'EleghantCatalog', text, kb.as_markup())
@@ -865,6 +978,285 @@ async def text_preorder(message: types.Message, state: FSMContext):
     kb.adjust(1)
     await message.answer("Выберите категорию:", reply_markup=kb.as_markup())
 
+# ===========================
+# ОБРАБОТЧИК ДЛЯ ТОТР-КЛЮЧЕЙ
+# ===========================
+@dp.message(F.text == "ТОТР-Ключи")
+async def text_totp(message: types.Message):
+    """Главное меню TOTP-ключей с инлайн-кнопками"""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Добавить ключ", callback_data="totp_add")
+    kb.button(text="Мои ключи", callback_data="totp_list")
+    kb.button(text="Обновить все коды", callback_data="totp_refresh_all")
+    kb.adjust(1)
+    await message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.TOTP}">🔐</tg-emoji> <b>Управление TOTP-ключами</b>\n\n'
+        'Здесь вы можете добавлять, просматривать и управлять вашими TOTP-ключами.\n\n'
+        'Выберите действие:',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+
+# --- ДОБАВЛЕНИЕ КЛЮЧА ---
+@dp.callback_query(F.data == "totp_add")
+async def totp_add_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(ShopState.waiting_for_totp_name)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="totp_cancel")
+    await call.message.edit_text(
+        f'<tg-emoji emoji-id="{CustomEmoji.TOTP}">🔐</tg-emoji> <b>Добавление TOTP-ключа</b>\n\n'
+        'Введите название для этого ключа (например: "ГосУслуги", "ГосУслуги2", "Гос1"):',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+@dp.message(ShopState.waiting_for_totp_name)
+async def totp_add_name(message: types.Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.answer("❌ Название не может быть пустым.")
+        return
+    # Проверяем, есть ли уже ключ с таким названием
+    existing = await fetchone(
+        "SELECT id FROM totp_keys WHERE user_id = ? AND name = ?",
+        (message.from_user.id, name)
+    )
+    if existing:
+        await message.answer(f"❌ Ключ с названием «{name}» уже существует. Используйте другое название.")
+        return
+    await state.update_data(totp_name=name)
+    await state.set_state(ShopState.waiting_for_totp_secret)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="totp_cancel")
+    await message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.TOTP}">🔐</tg-emoji> <b>Ключ: {name}</b>\n\n'
+        'Введите секретный ключ в формате base32.\n\n'
+        'Пример: <code>JBSWY3DPEHPK3PXP</code>\n\n'
+        'Ключ можно скопировать из приложения-аутентификатора.',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+
+@dp.message(ShopState.waiting_for_totp_secret)
+async def totp_add_secret(message: types.Message, state: FSMContext):
+    secret = message.text.strip().upper().replace(' ', '')
+    # Проверяем, что секрет в формате base32
+    try:
+        # Пытаемся декодировать base32
+        base64.b32decode(secret, casefold=True)
+    except Exception:
+        await message.answer(
+            "❌ Неверный формат секретного ключа.\n\n"
+            "Убедитесь, что вы ввели корректный base32 ключ.\n"
+            "Пример: <code>JBSWY3DPEHPK3PXP</code>",
+            parse_mode="HTML"
+        )
+        return
+    data = await state.get_data()
+    name = data.get('totp_name')
+    user_id = message.from_user.id
+    # Сохраняем ключ в БД
+    await execute_query(
+        "INSERT INTO totp_keys (user_id, name, secret, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, name, secret, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")),
+        commit=True
+    )
+    await message.answer(
+        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Ключ «{name}» успешно добавлен!</b>',
+        parse_mode="HTML"
+    )
+    await state.clear()
+    # Показываем меню TOTP
+    await text_totp(message)
+
+# --- СПИСОК КЛЮЧЕЙ ---
+@dp.callback_query(F.data == "totp_list")
+async def totp_list(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    keys = await fetchall(
+        "SELECT id, name, secret, created_at FROM totp_keys WHERE user_id = ?",
+        (user_id,)
+    )
+    if not keys:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🔙 Назад", callback_data="totp_back_to_menu")
+        await call.message.edit_text(
+            f'<tg-emoji emoji-id="{CustomEmoji.TOTP}">🔐</tg-emoji> <b>Мои TOTP-ключи</b>\n\n'
+            'У вас пока нет сохранённых ключей.',
+            parse_mode="HTML",
+            reply_markup=kb.as_markup()
+        )
+        await call.answer()
+        return
+    kb = InlineKeyboardBuilder()
+    for key_id, name, secret, created_at in keys:
+        # Генерируем текущий код
+        try:
+            totp = pyotp.TOTP(secret)
+            code = totp.now()
+            # Подсчитываем оставшиеся секунды до смены кода
+            remaining = 30 - (int(time.time()) % 30)
+            kb.button(
+                text=f"🔑 {name}: {code} ({remaining}с)",
+                callback_data=f"totp_view_{key_id}"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка генерации TOTP для {name}: {e}")
+            kb.button(
+                text=f"❌ {name}: ошибка",
+                callback_data=f"totp_view_{key_id}"
+            )
+    kb.button(text="Обновить все", callback_data="totp_refresh_all")
+    kb.button(text="Добавить ключ", callback_data="totp_add")
+    kb.button(text="Назад", callback_data="totp_back_to_menu")
+    kb.adjust(1)
+    await call.message.edit_text(
+        f'<tg-emoji emoji-id="{CustomEmoji.TOTP}">🔐</tg-emoji> <b>Мои TOTP-ключи</b>\n\n'
+        'Нажмите на ключ для управления им.\n'
+        'Коды обновляются каждые 30 секунд.',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+# --- ПРОСМОТР КОНКРЕТНОГО КЛЮЧА ---
+@dp.callback_query(F.data.startswith("totp_view_"))
+async def totp_view(call: types.CallbackQuery):
+    try:
+        key_id = int(call.data.split("_")[2])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    user_id = call.from_user.id
+    key = await fetchone(
+        "SELECT id, name, secret, created_at FROM totp_keys WHERE id = ? AND user_id = ?",
+        (key_id, user_id)
+    )
+    if not key:
+        await call.answer("❌ Ключ не найден", show_alert=True)
+        return
+    key_id, name, secret, created_at = key
+    try:
+        totp = pyotp.TOTP(secret)
+        code = totp.now()
+        remaining = 30 - (int(time.time()) % 30)
+        progress = int((30 - remaining) / 30 * 10)
+        progress_bar = "█" * progress + "░" * (10 - progress)
+        code_text = (
+            f'<tg-emoji emoji-id="{CustomEmoji.TOTP}">🔐</tg-emoji> <b>{name}</b>\n\n'
+            f'<b>Текущий код:</b>\n'
+            f'<code>{code}</code>\n\n'
+            f'Обновление через: <b>{remaining} сек.</b>\n'
+            f'[{progress_bar}]'
+        )
+    except Exception as e:
+        logger.error(f"Ошибка генерации TOTP для {name}: {e}")
+        code_text = f'❌ <b>{name}</b>\n\nОшибка генерации кода. Возможно, секретный ключ повреждён.'
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Обновить", callback_data=f"totp_refresh_{key_id}")
+    kb.button(text="Удалить", callback_data=f"totp_delete_{key_id}", style="danger")
+    kb.button(text="Назад к списку", callback_data="totp_list")
+    kb.adjust(1)
+    await call.message.edit_text(
+        code_text,
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+# --- ОБНОВЛЕНИЕ КОНКРЕТНОГО КЛЮЧА ---
+@dp.callback_query(F.data.startswith("totp_refresh_"))
+async def totp_refresh(call: types.CallbackQuery):
+    try:
+        key_id = int(call.data.split("_")[2])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    # Просто перенаправляем на просмотр
+    await totp_view(call)
+
+# --- ОБНОВЛЕНИЕ ВСЕХ КЛЮЧЕЙ ---
+@dp.callback_query(F.data == "totp_refresh_all")
+async def totp_refresh_all(call: types.CallbackQuery):
+    # Просто обновляем список
+    await totp_list(call)
+
+# --- УДАЛЕНИЕ КЛЮЧА ---
+@dp.callback_query(F.data.startswith("totp_delete_"))
+async def totp_delete(call: types.CallbackQuery):
+    try:
+        key_id = int(call.data.split("_")[2])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    user_id = call.from_user.id
+    key = await fetchone(
+        "SELECT name FROM totp_keys WHERE id = ? AND user_id = ?",
+        (key_id, user_id)
+    )
+    if not key:
+        await call.answer("❌ Ключ не найден", show_alert=True)
+        return
+    name = key[0]
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Да, удалить", callback_data=f"totp_confirm_delete_{key_id}", style="danger")
+    kb.button(text="Отмена", callback_data=f"totp_view_{key_id}")
+    kb.adjust(1)
+    await call.message.edit_text(
+        f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">⚠️</tg-emoji> <b>Удаление ключа</b>\n\n'
+        f'Вы уверены, что хотите удалить ключ «{name}»?\n\n'
+        f'<b>Это действие необратимо!</b>',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("totp_confirm_delete_"))
+async def totp_confirm_delete(call: types.CallbackQuery):
+    try:
+        key_id = int(call.data.split("_")[3])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    user_id = call.from_user.id
+    key = await fetchone(
+        "SELECT name FROM totp_keys WHERE id = ? AND user_id = ?",
+        (key_id, user_id)
+    )
+    if not key:
+        await call.answer("❌ Ключ не найден", show_alert=True)
+        return
+    name = key[0]
+    await execute_query(
+        "DELETE FROM totp_keys WHERE id = ? AND user_id = ?",
+        (key_id, user_id),
+        commit=True
+    )
+    await call.message.edit_text(
+        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Ключ «{name}» успешно удалён.',
+        parse_mode="HTML"
+    )
+    await call.answer()
+    # Через секунду показываем список
+    await asyncio.sleep(1)
+    await totp_list(call)
+
+# --- ОТМЕНА ДОБАВЛЕНИЯ ---
+@dp.callback_query(F.data == "totp_cancel")
+async def totp_cancel(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("❌ Действие отменено.")
+    await call.answer()
+    await text_totp(call.message)
+
+# --- ВОЗВРАТ В МЕНЮ TOTP ---
+@dp.callback_query(F.data == "totp_back_to_menu")
+async def totp_back_to_menu(call: types.CallbackQuery):
+    await call.message.delete()
+    await text_totp(call.message)
+    await call.answer()
+
 # --- КАТАЛОГ ---
 @dp.callback_query(F.data.startswith("group_"))
 async def show_group_categories(call: types.CallbackQuery):
@@ -874,8 +1266,8 @@ async def show_group_categories(call: types.CallbackQuery):
 @dp.callback_query(F.data == "back_to_main_catalog")
 async def back_to_main_catalog(call: types.CallbackQuery):
     kb = InlineKeyboardBuilder()
-    kb.button(text="GY 1970+", callback_data="group_gy", icon_custom_emoji_id=CustomEmoji.GY)
-    kb.button(text="Л0гu 1960+, все операторы", callback_data="group_l0gu", icon_custom_emoji_id=CustomEmoji.MEGAFON)
+    kb.button(text="GY 1970+",callback_data="group_gy",icon_custom_emoji_id=CustomEmoji.GY,style="primary")
+    kb.button( text="Л0гu 1960+, все операторы", callback_data="group_l0gu", icon_custom_emoji_id=CustomEmoji.MEGAFON, style="success" )
     kb.adjust(1)
     text = f'<tg-emoji emoji-id="{CustomEmoji.GUN}">☝️</tg-emoji> <b>Каталог товаров</b>\n\nВыберите интересующий вас раздел:'
     await call.message.delete()
@@ -894,7 +1286,7 @@ async def back_to_gy(call: types.CallbackQuery):
 async def view_cat_cb(call: types.CallbackQuery):
     try:
         cid = int(call.data.split("_")[1])
-    except:
+    except Exception:
         await call.answer("❌ Ошибка")
         return
     cat = await fetchone("SELECT name, desc, price, cat_group FROM categories WHERE id = ?", (cid,))
@@ -907,8 +1299,9 @@ async def view_cat_cb(call: types.CallbackQuery):
     text = f"{cat_desc}\n\n<tg-emoji emoji-id=\"{CustomEmoji.MONEY}\">💵</tg-emoji> Цена: <b>{cat_price} USDT/шт</b>\n<tg-emoji emoji-id=\"{CustomEmoji.WARNING}\">❗️</tg-emoji> Наличие: {stock_count} шт."
     kb = InlineKeyboardBuilder()
     if stock_count > 0:
-        kb.button(text="🛒 Купить", callback_data=f"buy_{cid}")
-        kb.button(text="⏳ Предзаказ", callback_data=f"preorder_from_cat_{cid}")
+        kb.button(text="Купить", callback_data=f"buy_{cid}", icon_custom_emoji_id=CustomEmoji.BUYTAG)
+    else:    
+        kb.button(text="Предзаказ", callback_data=f"preorder_from_cat_{cid}", icon_custom_emoji_id=CustomEmoji.PREORDERCHECK)
     if cat_group == "l0gu_1970":
         kb.button(text="Назад к операторам", callback_data="back_to_l0gu", icon_custom_emoji_id=CustomEmoji.BACK)
     elif cat_group == "gy_1970":
@@ -987,9 +1380,7 @@ async def preorder_pay_provider_cb(call: types.CallbackQuery, state: FSMContext)
     preorder_id = preorder[0] if preorder else None
 
     if provider == "xrocket":
-        inv = await xrocket_create_invoice(
-            amount=total, description=f"Предзаказ: {cat_name} x{qty}", expired_in=3600
-        )
+        inv = await xrocket_create_invoice(amount=total, description=f"Предзаказ: {cat_name} x{qty}", expired_in=3600)
         if not inv.get('ok'):
             await call.message.answer(f"⚠ Ошибка API xRocket: {inv.get('description', 'Неизвестная ошибка')}")
             await state.clear()
@@ -1069,7 +1460,7 @@ async def auto_check_preorder_payment(invoice_id, user_id: int, cat_id: int, qua
                 )
                 try:
                     await msg_to_edit.delete()
-                except:
+                except Exception:
                     pass
                 return
             elif is_expired:
@@ -1111,69 +1502,141 @@ async def preorder_from_cat_cb(call: types.CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
-# --- ПОКУПКА ---
+# ═══════════════════════════════════════════════════════════════════════════════
+# ПОКУПКА
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_cb(call: types.CallbackQuery, state: FSMContext):
     try:
         cid = int(call.data.split("_")[1])
-    except:
+    except Exception:
         await call.answer("❌ Ошибка")
         return
-    await state.update_data(cid=cid)
+    cat = await fetchone("SELECT name, price FROM categories WHERE id = ?", (cid,))
+    if not cat:
+        await call.answer("❌ Категория не найдена")
+        return
+    stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cid,))
+    stock_count = stock[0] if stock else 0
+    if stock_count == 0:
+        await call.answer("❌ Товар закончился", show_alert=True)
+        return
+    cat_name, price = cat[0], float(cat[1])
+    await state.update_data(cid=cid, cat_name=cat_name, price=price, stock_count=stock_count)
     await state.set_state(ShopState.waiting_for_quantity)
-    await call.message.answer(
-        f'<tg-emoji emoji-id="{CustomEmoji.QUESTION}">❓</tg-emoji> Сколько штук хотите купить? (максимум {MAX_QUANTITY_PER_PURCHASE} шт.)\nОтправьте число:',
-        parse_mode="HTML"
+    await show_quantity_keyboard(call.message, cid, cat_name, price, stock_count)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("qty_custom_"), ShopState.waiting_for_quantity)
+async def qty_custom_cb(call: types.CallbackQuery, state: FSMContext):
+    try:
+        cid = int(call.data.split("_")[2])
+    except Exception:
+        await call.answer("❌ Ошибка")
+        return
+    await state.set_state(ShopState.waiting_for_custom_quantity)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Назад", callback_data=f"back_to_category_{cid}", icon_custom_emoji_id=CustomEmoji.BACK)
+    kb.adjust(1)
+    await call.message.edit_text(
+        f'<tg-emoji emoji-id="{CustomEmoji.QUESTION}">❓</tg-emoji> Введите количество (1–{MAX_QUANTITY_PER_PURCHASE}):',
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
     )
     await call.answer()
 
-@dp.message(ShopState.waiting_for_quantity)
-async def quantity_msg(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите положительное число.', parse_mode="HTML")
-    qty = int(message.text)
-    if qty <= 0 or qty > MAX_QUANTITY_PER_PURCHASE:
-        return await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите число от 1 до {MAX_QUANTITY_PER_PURCHASE}.', parse_mode="HTML")
-    data = await state.get_data()
-    cid = data['cid']
-    stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cid,))
-    stock_count = stock[0] if stock else 0
-    if qty > stock_count:
-        await state.clear()
+@dp.callback_query(F.data.startswith("qty_"), ShopState.waiting_for_quantity)
+async def qty_preset_cb(call: types.CallbackQuery, state: FSMContext):
+    parts = call.data.split("_")
+    try:
+        cid = int(parts[1])
+        qty = int(parts[2])
+    except Exception:
+        await call.answer("❌ Ошибка")
+        return
+    await _process_quantity_chosen(call.message, state, call.from_user.id, cid, qty, call)
+
+@dp.message(ShopState.waiting_for_custom_quantity)
+async def custom_quantity_msg(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
         return await message.answer(
-            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> В наличии только {stock_count} шт.\n\nВы можете оформить <b>предзаказ</b>!',
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите положительное число.',
             parse_mode="HTML"
         )
+    qty = int(message.text)
+    if qty <= 0 or qty > MAX_QUANTITY_PER_PURCHASE:
+        return await message.answer(
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Введите число от 1 до {MAX_QUANTITY_PER_PURCHASE}.',
+            parse_mode="HTML"
+        )
+    data = await state.get_data()
+    cid = data.get('cid')
+    if not cid:
+        await message.answer("❌ Ошибка состояния, начните покупку заново.")
+        await state.clear()
+        return
+    await _process_quantity_chosen(message, state, message.from_user.id, cid, qty)
+
+async def _process_quantity_chosen(
+    message: types.Message,
+    state: FSMContext,
+    user_id: int,
+    cid: int,
+    qty: int,
+    call: types.CallbackQuery = None
+):
+    stock = await fetchone("SELECT COUNT(*) FROM inventory WHERE cat_id = ?", (cid,))
+    stock_count = stock[0] if stock else 0
     cat = await fetchone("SELECT name, price FROM categories WHERE id = ?", (cid,))
     if not cat:
+        await message.answer("❌ Категория не найдена")
         await state.clear()
-        return await message.answer("❌ Категория не найдена")
-    price = float(cat[1])
+        if call:
+            await call.answer()
+        return
+    cat_name, price = cat[0], float(cat[1])
+    if qty > stock_count:
+        await state.clear()
+        kb = InlineKeyboardBuilder()
+        kb.button(text="⏳ Оформить предзаказ", callback_data=f"preorder_from_cat_{cid}")
+        kb.adjust(1)
+        txt = (
+            f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> В наличии только <b>{stock_count} шт.</b>\n\n'
+            f'Вы можете оформить <b>предзаказ</b>!'
+        )
+        await message.answer(txt, parse_mode="HTML", reply_markup=kb.as_markup())
+        if call:
+            await call.answer()
+        return
     total = round(price * qty, 2)
-    balance = await get_balance(message.from_user.id)
-    discount = 0
-    if hasattr(bot, 'user_promos') and message.from_user.id in bot.user_promos:
-        promo_data = bot.user_promos[message.from_user.id]
+    discount_text = ""
+    if hasattr(bot, 'user_promos') and user_id in bot.user_promos:
+        promo_data = bot.user_promos[user_id]
         if promo_data['type'] == 'percent':
-            discount = total * promo_data['discount'] / 100
+            discount = round(total * promo_data['discount'] / 100, 2)
             total = round(total - discount, 2)
-            await message.answer(f'<tg-emoji emoji-id="{CustomEmoji.PROMO}">🎫</tg-emoji> Применена скидка {promo_data["discount"]}%! Сумма к оплате: {total} USDT', parse_mode="HTML")
-            del bot.user_promos[message.from_user.id]
-    await state.update_data(quantity=qty, total=total, cat_name=cat[0], cid=cid)
+            discount_text = f'\n<tg-emoji emoji-id="{CustomEmoji.PROMO}">🎫</tg-emoji> Скидка {promo_data["discount"]}% применена!'
+            del bot.user_promos[user_id]
+    balance = await get_balance(user_id)
+    await state.update_data(cid=cid, quantity=qty, total=total, cat_name=cat_name)
     await state.set_state(ShopState.waiting_for_payment_method)
     kb = InlineKeyboardBuilder()
     kb.button(text="Оплатить @CryptoBot", callback_data="pay_crypto", icon_custom_emoji_id=CustomEmoji.CRYPTO_PAY)
     kb.button(text="Оплатить @xRocket", callback_data="pay_xrocket", icon_custom_emoji_id=CustomEmoji.XROCKET_PAY)
     kb.button(text="Баланс (Кэшбек 3%)", callback_data="pay_balance", icon_custom_emoji_id=CustomEmoji.BALANCE_PAY)
     kb.adjust(1)
-    await message.answer(
-        f"Вы выбрали {hbold(cat[0])} x{qty}\n"
-        f"Цена за шт: {price} USDT\n"
-        f"Итого: {hbold(str(total))} USDT\n"
-        f"💰 Ваш баланс: {hbold(str(balance))} USDT\n\n"
-        f"Выберите способ оплаты:",
-        reply_markup=kb.as_markup(), parse_mode="HTML"
+    text = (
+        f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_BOX}">📦</tg-emoji> <b>{cat_name}</b> × {qty} шт.\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.MONEY}">💵</tg-emoji> Цена за шт.: <b>{price} USDT</b>\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.CHECKMARK}">✅</tg-emoji> Итого: <b>{total} USDT</b>'
+        f'{discount_text}\n'
+        f'<tg-emoji emoji-id="{CustomEmoji.LOCK}">🔒</tg-emoji> Ваш баланс: <b>{balance} USDT</b>\n\n'
+        f'Выберите способ оплаты:'
     )
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    if call:
+        await call.answer()
 
 @dp.callback_query(F.data == "pay_crypto")
 async def pay_crypto_cb(call: types.CallbackQuery, state: FSMContext):
@@ -1218,11 +1681,7 @@ async def pay_xrocket_cb(call: types.CallbackQuery, state: FSMContext):
     total = data['total']
     cat_name = data['cat_name']
     user_id = call.from_user.id
-    inv = await xrocket_create_invoice(
-        amount=total,
-        description=f"{cat_name} x{quantity}",
-        expired_in=1800
-    )
+    inv = await xrocket_create_invoice(amount=total, description=f"{cat_name} x{quantity}", expired_in=1800)
     if not inv.get('ok'):
         await call.message.answer(f"⚠ Ошибка API xRocket: {inv.get('description', 'Неизвестная ошибка')}")
         await state.clear()
@@ -1313,21 +1772,16 @@ async def show_profile_with_image(user_id: int, target_message: types.Message):
     await send_with_image(target_message, 'EleghantProfile', text, kb.as_markup())
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# СИСТЕМА ВЫВОДА СРЕДСТВ
+# ВЫВОД СРЕДСТВ
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "profile_withdraw")
 async def profile_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
     balance = await get_balance(user_id)
-
     if balance <= 0:
-        await call.answer(
-            "❌ На вашем балансе недостаточно средств для вывода.",
-            show_alert=True
-        )
+        await call.answer("❌ На вашем балансе недостаточно средств для вывода.", show_alert=True)
         return
-
     await state.set_state(ShopState.waiting_for_withdraw_amount)
     kb = InlineKeyboardBuilder()
     kb.button(text="❌ Отмена", callback_data="cancel_withdraw")
@@ -1345,7 +1799,6 @@ async def profile_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
 async def withdraw_amount_msg(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     balance = await get_balance(user_id)
-
     try:
         amount = float(message.text.replace(',', '.'))
         if amount <= 0:
@@ -1357,14 +1810,12 @@ async def withdraw_amount_msg(message: types.Message, state: FSMContext):
             parse_mode="HTML"
         )
         return
-
     if amount < 1:
         await message.answer(
             f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❗️</tg-emoji> Минимальная сумма вывода — <b>1 USDT</b>.',
             parse_mode="HTML"
         )
         return
-
     if amount > balance:
         await message.answer(
             f'<tg-emoji emoji-id="{CustomEmoji.WARNING}">❌</tg-emoji> <b>Недостаточно средств!</b>\n\n'
@@ -1374,15 +1825,12 @@ async def withdraw_amount_msg(message: types.Message, state: FSMContext):
             parse_mode="HTML"
         )
         return
-
     await state.update_data(withdraw_amount=amount)
     await state.set_state(ShopState.waiting_for_withdraw_confirm)
-
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, вывести", callback_data="confirm_withdraw")
     kb.button(text="❌ Отмена", callback_data="cancel_withdraw")
     kb.adjust(2)
-
     await message.answer(
         f'<tg-emoji emoji-id="{CustomEmoji.QUESTION}">❓</tg-emoji> <b>Подтверждение вывода</b>\n\n'
         f'Вы уверены, что хотите вывести <b>{amount} USDT</b>?\n\n'
@@ -1396,8 +1844,6 @@ async def confirm_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
     data = await state.get_data()
     amount = data.get('withdraw_amount', 0)
-
-    # Повторная проверка баланса перед созданием заявки
     balance = await get_balance(user_id)
     if amount > balance:
         await call.message.edit_text(
@@ -1408,11 +1854,8 @@ async def confirm_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
         await state.clear()
         await call.answer()
         return
-
     username = call.from_user.username or ""
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    # Сохраняем заявку в БД
     await execute_query(
         "INSERT INTO withdraw_requests (user_id, username, amount, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
         (user_id, username, amount, now_str),
@@ -1423,8 +1866,6 @@ async def confirm_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
         (user_id,)
     )
     request_id = request_row[0] if request_row else "?"
-
-    # Уведомляем пользователя
     await call.message.edit_text(
         f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> <b>Заявка создана!</b>\n\n'
         f'Администрация рассмотрит её в ближайшее время.\n\n'
@@ -1432,8 +1873,6 @@ async def confirm_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
         f'<tg-emoji emoji-id="{CustomEmoji.TIME}">⏳</tg-emoji> Номер заявки: <b>#{request_id}</b>',
         parse_mode="HTML"
     )
-
-    # Уведомляем администратора
     user_link = f"@{username}" if username else f"<a href='tg://user?id={user_id}'>ID: {user_id}</a>"
     admin_text = (
         f'💸 <b>Новая заявка на вывод #{request_id}</b>\n\n'
@@ -1446,17 +1885,10 @@ async def confirm_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
     admin_kb.button(text="✅ Одобрить", callback_data=f"withdraw_approve_{request_id}")
     admin_kb.button(text="❌ Отклонить", callback_data=f"withdraw_reject_{request_id}")
     admin_kb.adjust(2)
-
     try:
-        await bot.send_message(
-            ADMIN_ID,
-            admin_text,
-            parse_mode="HTML",
-            reply_markup=admin_kb.as_markup()
-        )
+        await bot.send_message(ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=admin_kb.as_markup())
     except Exception as e:
         logger.error(f"Не удалось уведомить администратора о заявке #{request_id}: {e}")
-
     await state.clear()
     await call.answer()
 
@@ -1469,20 +1901,16 @@ async def cancel_withdraw_cb(call: types.CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
-# --- ОБРАБОТКА ЗАЯВОК НА ВЫВОД АДМИНИСТРАТОРОМ ---
-
 @dp.callback_query(F.data.startswith("withdraw_approve_"))
 async def withdraw_approve_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         await call.answer("❌ Нет доступа", show_alert=True)
         return
-
     try:
         request_id = int(call.data.split("_")[2])
     except (IndexError, ValueError):
         await call.answer("❌ Ошибка", show_alert=True)
         return
-
     request = await fetchone(
         "SELECT user_id, username, amount, status FROM withdraw_requests WHERE id = ?",
         (request_id,)
@@ -1491,14 +1919,10 @@ async def withdraw_approve_cb(call: types.CallbackQuery):
         await call.message.edit_text(f"❌ Заявка #{request_id} не найдена.")
         await call.answer()
         return
-
     user_id, username, amount, status = request
-
     if status != 'pending':
         await call.answer(f"⚠️ Заявка уже обработана (статус: {status})", show_alert=True)
         return
-
-    # Проверяем баланс пользователя
     balance = await get_balance(user_id)
     if balance < amount:
         await call.message.edit_text(
@@ -1513,17 +1937,12 @@ async def withdraw_approve_cb(call: types.CallbackQuery):
         )
         await call.answer()
         return
-
-    # Списываем с баланса
     await update_balance(user_id, -amount, "withdraw", ADMIN_ID)
-
-    # Обновляем статус заявки
     await execute_query(
         "UPDATE withdraw_requests SET status = 'approved', processed_at = ? WHERE id = ?",
         (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), request_id),
         commit=True
     )
-
     user_link = f"@{username}" if username else f"ID: {user_id}"
     await call.message.edit_text(
         f'✅ <b>Заявка #{request_id} одобрена</b>\n\n'
@@ -1532,8 +1951,6 @@ async def withdraw_approve_cb(call: types.CallbackQuery):
         f'💳 Баланс списан.',
         parse_mode="HTML"
     )
-
-    # Уведомляем пользователя
     try:
         await bot.send_message(
             user_id,
@@ -1544,7 +1961,6 @@ async def withdraw_approve_cb(call: types.CallbackQuery):
         )
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id} об одобрении заявки: {e}")
-
     await call.answer("✅ Заявка одобрена, баланс списан!")
     logger.info(f"Admin {call.from_user.id} approved withdraw #{request_id} for user {user_id}, amount {amount} USDT")
 
@@ -1553,13 +1969,11 @@ async def withdraw_reject_cb(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         await call.answer("❌ Нет доступа", show_alert=True)
         return
-
     try:
         request_id = int(call.data.split("_")[2])
     except (IndexError, ValueError):
         await call.answer("❌ Ошибка", show_alert=True)
         return
-
     request = await fetchone(
         "SELECT user_id, username, amount, status FROM withdraw_requests WHERE id = ?",
         (request_id,)
@@ -1568,21 +1982,16 @@ async def withdraw_reject_cb(call: types.CallbackQuery, state: FSMContext):
         await call.message.edit_text(f"❌ Заявка #{request_id} не найдена.")
         await call.answer()
         return
-
     user_id, username, amount, status = request
-
     if status != 'pending':
         await call.answer(f"⚠️ Заявка уже обработана (статус: {status})", show_alert=True)
         return
-
     await state.update_data(reject_request_id=request_id, reject_user_id=user_id,
                             reject_username=username, reject_amount=amount)
     await state.set_state(AdminState.withdraw_reject_reason)
-
     kb = InlineKeyboardBuilder()
     kb.button(text="Пропустить причину", callback_data=f"withdraw_reject_noreason_{request_id}")
     kb.adjust(1)
-
     await call.message.answer(
         f'❌ <b>Отклонение заявки #{request_id}</b>\n\n'
         f'Введите причину отклонения (или нажмите кнопку, чтобы пропустить):',
@@ -1645,7 +2054,6 @@ async def _do_reject_withdraw(request_id, user_id, username, amount, reason, sta
     logger.info(f"Withdraw #{request_id} rejected for user {user_id}, reason: {note}")
     await state.clear()
 
-# --- КОМАНДА ПРОСМОТРА ЗАЯВОК НА ВЫВОД (АДМИН) ---
 @dp.message(Command("withdraws"))
 async def cmd_withdraws(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -1663,10 +2071,7 @@ async def cmd_withdraws(message: types.Message):
         text += f"#{rid} | {u} | {amount} USDT | {created[:16]}\n"
     await message.answer(text, parse_mode="HTML")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# КОНЕЦ СИСТЕМЫ ВЫВОДА
-# ═══════════════════════════════════════════════════════════════════════════════
-
+# --- ПРЕДЗАКАЗЫ ПРОФИЛЬ ---
 @dp.callback_query(F.data == "profile_preorders")
 async def profile_preorders_cb(call: types.CallbackQuery):
     preorders = await fetchall(
@@ -1697,7 +2102,7 @@ async def profile_preorders_cb(call: types.CallbackQuery):
     kb.button(text="Назад к профилю", callback_data="back_to_profile", icon_custom_emoji_id=CustomEmoji.BACK)
     try:
         await call.message.delete()
-    except:
+    except Exception:
         pass
     await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await call.answer()
@@ -1720,7 +2125,7 @@ async def profile_history_cb(call: types.CallbackQuery):
     kb.button(text="Назад к профилю", callback_data="back_to_profile", icon_custom_emoji_id=CustomEmoji.BACK)
     try:
         await call.message.delete()
-    except:
+    except Exception:
         pass
     await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await call.answer()
@@ -1741,7 +2146,7 @@ async def profile_referral_cb(call: types.CallbackQuery):
     kb.button(text="Назад к профилю", callback_data="back_to_profile", icon_custom_emoji_id=CustomEmoji.BACK)
     try:
         await call.message.delete()
-    except:
+    except Exception:
         pass
     await send_with_image(call.message, 'ReferalIcon', text, kb.as_markup())
     await call.answer()
@@ -1755,6 +2160,7 @@ async def profile_promo_cb(call: types.CallbackQuery, state: FSMContext):
 @dp.message(ShopState.waiting_for_promo_code)
 async def promo_code_activate(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+    username = message.from_user.username or ""
     code = message.text.strip().upper()
     current_time = time.time()
     if user_id in user_promo_attempts:
@@ -1776,6 +2182,14 @@ async def promo_code_activate(message: types.Message, state: FSMContext):
         return
     if user_id in user_promo_attempts:
         del user_promo_attempts[user_id]
+
+    # Записываем использование промокода
+    await execute_query(
+        "INSERT INTO promo_usage (code, user_id, username, used_at) VALUES (?, ?, ?, ?)",
+        (code, user_id, username, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")),
+        commit=True
+    )
+
     if promo_type == 'percent':
         await message.answer(
             f'<tg-emoji emoji-id="{CustomEmoji.PREORDER_CHECK}">✅</tg-emoji> Промокод {code} активирован!\n'
@@ -1813,12 +2227,10 @@ async def deposit_amount(message: types.Message, state: FSMContext):
         if amount < 1 or amount > 10000:
             return await message.answer("❌ Сумма должна быть от 1 до 10000 USDT.")
         amount = round(amount, 2)
-    except:
+    except Exception:
         return await message.answer("❌ Введите число.")
-
     data = await state.get_data()
     provider = data.get('deposit_provider', 'crypto')
-
     if provider == "xrocket":
         inv = await xrocket_create_invoice(
             amount=amount,
@@ -1844,7 +2256,6 @@ async def deposit_amount(message: types.Message, state: FSMContext):
         invoice_id = inv['result']['invoice_id']
         pay_url = inv['result']['pay_url']
         provider_emoji = CustomEmoji.CRYPTO_PAY
-
     pending_balance_payments[invoice_id] = {
         'user_id': message.from_user.id, 'amount': amount,
         'created_at': datetime.now(), 'provider': provider
@@ -1868,7 +2279,7 @@ async def cmd_start_deep(message: types.Message):
     if len(args) > 1 and args[1].startswith('ref_'):
         try:
             ref_id = int(args[1].split('_')[1])
-        except:
+        except Exception:
             pass
     await handle_start(message, ref_id)
 
@@ -1926,7 +2337,14 @@ def build_admin_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📦 Добавить товар", callback_data="admin_add_stock")
     kb.button(text="📄 Загрузить товары из .txt", callback_data="admin_add_stock_txt")
     kb.button(text="🎫 Создать промокод", callback_data="admin_create_promo")
+    kb.button(text="🎫 Список промокодов", callback_data="admin_list_promos")
+    kb.button(text="📊 История промокодов", callback_data="admin_promo_history")
     kb.button(text="💰 Изменить цену категории", callback_data="admin_change_price")
+    kb.button(text="📝 Изменить описание категории", callback_data="admin_change_desc")
+    kb.button(text="🏆 Топ покупателей", callback_data="admin_top_buyers")
+    kb.button(text="🔍 Найти пользователя", callback_data="admin_search_user")
+    kb.button(text="🚫 Заблокировать пользователя", callback_data="admin_ban_user")
+    kb.button(text="✅ Разблокировать пользователя", callback_data="admin_unban_user")
     kb.button(text="🕞 Предзаказы", callback_data="admin_preorders")
     kb.button(text="💸 Заявки на вывод", callback_data="admin_withdraws")
     kb.adjust(1)
@@ -1969,7 +2387,471 @@ async def admin_toggle_maintenance(call: types.CallbackQuery):
         )
     await call.answer("✅ Статус изменён!")
 
-# --- ЗАЯВКИ НА ВЫВОД В АДМИНКЕ ---
+# ═══════════════════════════════════════════════════════════════════════════════
+# НОВОЕ: ИЗМЕНЕНИЕ ОПИСАНИЯ КАТЕГОРИИ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_change_desc")
+async def admin_change_desc_start(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    categories = await fetchall("SELECT id, name FROM categories")
+    if not categories:
+        await call.message.edit_text("❌ Нет категорий.")
+        return
+    kb = InlineKeyboardBuilder()
+    for cat_id, name in categories:
+        kb.button(text=name, callback_data=f"change_desc_cat_{cat_id}")
+    kb.button(text="🔙 Назад", callback_data="back_to_admin", icon_custom_emoji_id=CustomEmoji.BACK)
+    kb.adjust(1)
+    await call.message.edit_text(
+        "📝 <b>Изменение описания категории</b>\n\nВыберите категорию:",
+        reply_markup=kb.as_markup(), parse_mode="HTML"
+    )
+    await state.set_state(AdminState.change_desc_category)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("change_desc_cat_"), AdminState.change_desc_category)
+async def admin_change_desc_cat(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    try:
+        cat_id = int(call.data.split("_")[3])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    cat = await fetchone("SELECT id, name, desc FROM categories WHERE id = ?", (cat_id,))
+    if not cat:
+        await call.answer("❌ Категория не найдена")
+        return
+    await state.update_data(change_desc_cat_id=cat_id, change_desc_cat_name=cat[1])
+    await state.set_state(AdminState.change_desc_value)
+    current_desc = cat[2] or "Описание не задано"
+    preview = current_desc[:400] + ("..." if len(current_desc) > 400 else "")
+    await call.message.answer(
+        f"📝 <b>Категория: {cat[1]}</b>\n\n"
+        f"<b>Текущее описание (первые 400 символов):</b>\n<code>{preview}</code>\n\n"
+        f"Отправьте новое описание (поддерживается HTML и tg-emoji):",
+        parse_mode="HTML"
+    )
+    await call.answer()
+
+@dp.message(AdminState.change_desc_value)
+async def admin_change_desc_value(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    new_desc = message.html_text
+    if not new_desc or not new_desc.strip():
+        await message.answer("❌ Описание не может быть пустым.")
+        return
+    data = await state.get_data()
+    cat_id = data['change_desc_cat_id']
+    cat_name = data['change_desc_cat_name']
+    await execute_query(
+        "UPDATE categories SET desc = ? WHERE id = ?",
+        (new_desc, cat_id), commit=True
+    )
+    await message.answer(
+        f"✅ <b>Описание категории «{cat_name}» обновлено!</b>\n\n"
+        f"<b>Новое описание:</b>\n{new_desc}",
+        parse_mode="HTML"
+    )
+    logger.info(f"Admin {message.from_user.id} changed description for category {cat_id}")
+    await state.clear()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# НОВОЕ: СПИСОК И УДАЛЕНИЕ ПРОМОКОДОВ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_list_promos")
+async def admin_list_promos_cb(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+    promos = await fetchall(
+        "SELECT id, code, amount, promo_type, max_uses, used FROM promo_codes ORDER BY id DESC"
+    )
+    kb = InlineKeyboardBuilder()
+    if not promos:
+        kb.button(text="🔙 Назад", callback_data="back_to_admin")
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        await call.message.answer(
+            "🎫 <b>Промокоды</b>\n\n📭 Нет активных промокодов.",
+            parse_mode="HTML", reply_markup=kb.as_markup()
+        )
+        await call.answer()
+        return
+
+    text = "🎫 <b>Все промокоды:</b>\n\n"
+    for pid, code, amount, promo_type, max_uses, used in promos:
+        remaining = max_uses - used
+        status = "✅" if remaining > 0 else "❌"
+        type_str = f"{amount}%" if promo_type == "percent" else f"{amount} USDT"
+        text += f"{status} <code>{code}</code> | {type_str} | {used}/{max_uses} исп.\n"
+
+    # Кнопки удаления — по одной на каждый промокод
+    for pid, code, amount, promo_type, max_uses, used in promos:
+        kb.button(text=f"🗑 Удалить {code}", callback_data=f"admin_del_promo_{pid}")
+    kb.button(text="🔙 Назад", callback_data="back_to_admin")
+    kb.adjust(1)
+
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("admin_del_promo_"))
+async def admin_del_promo_cb(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+    try:
+        promo_id = int(call.data.split("_")[3])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    promo = await fetchone("SELECT code FROM promo_codes WHERE id = ?", (promo_id,))
+    if not promo:
+        await call.answer("❌ Промокод не найден", show_alert=True)
+        return
+    code = promo[0]
+    await execute_query("DELETE FROM promo_codes WHERE id = ?", (promo_id,), commit=True)
+    logger.info(f"Admin {call.from_user.id} deleted promo code {code} (id={promo_id})")
+    await call.answer(f"✅ Промокод {code} удалён!")
+    # Обновляем список
+    await admin_list_promos_cb(call)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# НОВОЕ: ИСТОРИЯ ИСПОЛЬЗОВАНИЯ ПРОМОКОДОВ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_promo_history")
+async def admin_promo_history_cb(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+    rows = await fetchall(
+        "SELECT code, user_id, username, used_at FROM promo_usage ORDER BY id DESC LIMIT 50"
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔙 Назад", callback_data="back_to_admin")
+    kb.adjust(1)
+    if not rows:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        await call.message.answer(
+            "📊 <b>История промокодов</b>\n\n📭 Пока никто не использовал промокоды.",
+            parse_mode="HTML", reply_markup=kb.as_markup()
+        )
+        await call.answer()
+        return
+    text = f"📊 <b>История использования промокодов (последние {len(rows)}):</b>\n\n"
+    for code, user_id, username, used_at in rows:
+        u = f"@{username}" if username else f"ID:{user_id}"
+        text += f"<code>{code}</code> | {u} | {used_at[:16]}\n"
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    await call.answer()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# НОВОЕ: ТОП ПОКУПАТЕЛЕЙ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_top_buyers")
+async def admin_top_buyers_cb(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+    rows = await fetchall(
+        "SELECT id, username, total FROM users ORDER BY total DESC LIMIT 20"
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔙 Назад", callback_data="back_to_admin")
+    kb.adjust(1)
+    if not rows:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        await call.message.answer(
+            "🏆 <b>Топ покупателей</b>\n\n📭 Нет данных.",
+            parse_mode="HTML", reply_markup=kb.as_markup()
+        )
+        await call.answer()
+        return
+    medals = ["🥇", "🥈", "🥉"]
+    text = "🏆 <b>Топ-20 покупателей по количеству покупок:</b>\n\n"
+    for idx, (uid, username, total) in enumerate(rows):
+        medal = medals[idx] if idx < 3 else f"{idx + 1}."
+        u = f"@{username}" if username else f"ID:{uid}"
+        text += f"{medal} {u} — <b>{total} шт.</b>\n"
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    await call.answer()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# НОВОЕ: ПОИСК ПОЛЬЗОВАТЕЛЯ ПО USERNAME
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_search_user")
+async def admin_search_user_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminState.search_user_username)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="back_to_admin")
+    kb.adjust(1)
+    await call.message.answer(
+        "🔍 <b>Поиск пользователя</b>\n\n"
+        "Введите username (без @) или ID пользователя:",
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+@dp.message(AdminState.search_user_username)
+async def admin_search_user_msg(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    query = message.text.strip().lstrip('@')
+    await state.clear()
+
+    # Пробуем найти по ID
+    user_row = None
+    if query.isdigit():
+        user_row = await fetchone(
+            "SELECT id, username, total, is_banned, ban_reason FROM users WHERE id = ?",
+            (int(query),)
+        )
+    # Если не нашли по ID — ищем по username
+    if not user_row:
+        user_row = await fetchone(
+            "SELECT id, username, total, is_banned, ban_reason FROM users WHERE LOWER(username) = LOWER(?)",
+            (query,)
+        )
+
+    if not user_row:
+        await message.answer(f"❌ Пользователь <code>{query}</code> не найден в базе.", parse_mode="HTML")
+        return
+
+    uid, username, total, is_banned, ban_reason = user_row
+    balance = await get_balance(uid)
+    ref_count, ref_earn = await get_referral_info(uid)
+    ban_status = f"🚫 Заблокирован\nПричина: {ban_reason or 'не указана'}" if is_banned else "✅ Активен"
+
+    text = (
+        f"🔍 <b>Результат поиска</b>\n\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"🔗 Username: @{username if username else '—'}\n"
+        f"💰 Баланс: <b>{balance} USDT</b>\n"
+        f"🛒 Покупок: <b>{total}</b>\n"
+        f"👥 Рефералов: {ref_count} | Заработано: {ref_earn} USDT\n"
+        f"📊 Статус: {ban_status}"
+    )
+    kb = InlineKeyboardBuilder()
+    if is_banned:
+        kb.button(text="✅ Разблокировать", callback_data=f"quick_unban_{uid}")
+    else:
+        kb.button(text="🚫 Заблокировать", callback_data=f"quick_ban_{uid}")
+    kb.button(text="🔙 Назад", callback_data="back_to_admin")
+    kb.adjust(1)
+    await message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# НОВОЕ: БАН / РАЗБАН ПОЛЬЗОВАТЕЛЯ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "admin_ban_user")
+async def admin_ban_user_start(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminState.ban_user_id)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="back_to_admin")
+    kb.adjust(1)
+    await call.message.answer(
+        "🚫 <b>Блокировка пользователя</b>\n\nВведите ID или username пользователя:",
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+@dp.message(AdminState.ban_user_id)
+async def admin_ban_user_id_msg(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    query = message.text.strip().lstrip('@')
+    user_row = None
+    if query.isdigit():
+        user_row = await fetchone("SELECT id, username FROM users WHERE id = ?", (int(query),))
+    if not user_row:
+        user_row = await fetchone("SELECT id, username FROM users WHERE LOWER(username) = LOWER(?)", (query,))
+    if not user_row:
+        await message.answer(f"❌ Пользователь не найден.")
+        await state.clear()
+        return
+    uid, username = user_row
+    await state.update_data(ban_target_id=uid, ban_target_username=username)
+    await state.set_state(AdminState.ban_user_reason)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Без причины", callback_data=f"ban_noreason_{uid}")
+    kb.adjust(1)
+    await message.answer(
+        f"🚫 Блокировка: @{username or uid}\n\nВведите причину блокировки:",
+        reply_markup=kb.as_markup()
+    )
+
+@dp.message(AdminState.ban_user_reason)
+async def admin_ban_user_reason_msg(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    uid = data['ban_target_id']
+    username = data['ban_target_username']
+    reason = message.text.strip()
+    await _do_ban_user(uid, username, reason, message, state)
+
+@dp.callback_query(F.data.startswith("ban_noreason_"))
+async def ban_noreason_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    data = await state.get_data()
+    uid = data.get('ban_target_id')
+    username = data.get('ban_target_username', '')
+    await _do_ban_user(uid, username, None, call.message, state)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("quick_ban_"))
+async def quick_ban_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    try:
+        uid = int(call.data.split("_")[2])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    user_row = await fetchone("SELECT username FROM users WHERE id = ?", (uid,))
+    username = user_row[0] if user_row else ""
+    await state.update_data(ban_target_id=uid, ban_target_username=username)
+    await state.set_state(AdminState.ban_user_reason)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Без причины", callback_data=f"ban_noreason_{uid}")
+    kb.adjust(1)
+    await call.message.answer(
+        f"🚫 Блокировка ID {uid}\n\nВведите причину блокировки:",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+async def _do_ban_user(uid, username, reason, message_obj, state):
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    await execute_query(
+        "UPDATE users SET is_banned = 1, ban_reason = ?, banned_at = ? WHERE id = ?",
+        (reason, now_str, uid), commit=True
+    )
+    u = f"@{username}" if username else f"ID:{uid}"
+    reason_text = reason or "Не указана"
+    await message_obj.answer(
+        f"✅ <b>Пользователь {u} заблокирован</b>\n\n📝 Причина: {reason_text}",
+        parse_mode="HTML"
+    )
+    try:
+        notify_text = (
+            f'🚫 <b>Вы заблокированы</b>\n\n'
+            f'Причина: {reason_text}\n\n'
+            f'Для обжалования обратитесь в поддержку: {SUPPORT_URL}'
+        )
+        await bot.send_message(uid, notify_text, parse_mode="HTML")
+    except Exception:
+        pass
+    logger.info(f"Admin banned user {uid}, reason: {reason_text}")
+    await state.clear()
+
+# --- РАЗБАН ---
+@dp.callback_query(F.data == "admin_unban_user")
+async def admin_unban_user_start(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminState.unban_user_id)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="back_to_admin")
+    kb.adjust(1)
+    await call.message.answer(
+        "✅ <b>Разблокировка пользователя</b>\n\nВведите ID или username пользователя:",
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await call.answer()
+
+@dp.message(AdminState.unban_user_id)
+async def admin_unban_user_msg(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    query = message.text.strip().lstrip('@')
+    user_row = None
+    if query.isdigit():
+        user_row = await fetchone("SELECT id, username, is_banned FROM users WHERE id = ?", (int(query),))
+    if not user_row:
+        user_row = await fetchone("SELECT id, username, is_banned FROM users WHERE LOWER(username) = LOWER(?)", (query,))
+    if not user_row:
+        await message.answer("❌ Пользователь не найден.")
+        await state.clear()
+        return
+    uid, username, is_banned = user_row
+    if not is_banned:
+        await message.answer(f"ℹ️ Пользователь @{username or uid} не заблокирован.")
+        await state.clear()
+        return
+    await execute_query(
+        "UPDATE users SET is_banned = 0, ban_reason = NULL, banned_at = NULL WHERE id = ?",
+        (uid,), commit=True
+    )
+    u = f"@{username}" if username else f"ID:{uid}"
+    await message.answer(f"✅ <b>Пользователь {u} разблокирован!</b>", parse_mode="HTML")
+    try:
+        await bot.send_message(uid, "✅ <b>Ваша блокировка снята.</b> Добро пожаловать обратно!", parse_mode="HTML")
+    except Exception:
+        pass
+    logger.info(f"Admin unbanned user {uid}")
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("quick_unban_"))
+async def quick_unban_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    try:
+        uid = int(call.data.split("_")[2])
+    except (IndexError, ValueError):
+        await call.answer("❌ Ошибка")
+        return
+    user_row = await fetchone("SELECT username FROM users WHERE id = ?", (uid,))
+    username = user_row[0] if user_row else ""
+    await execute_query(
+        "UPDATE users SET is_banned = 0, ban_reason = NULL, banned_at = NULL WHERE id = ?",
+        (uid,), commit=True
+    )
+    u = f"@{username}" if username else f"ID:{uid}"
+    await call.message.answer(f"✅ <b>Пользователь {u} разблокирован!</b>", parse_mode="HTML")
+    try:
+        await bot.send_message(uid, "✅ <b>Ваша блокировка снята.</b> Добро пожаловать обратно!", parse_mode="HTML")
+    except Exception:
+        pass
+    logger.info(f"Admin unbanned user {uid}")
+    await call.answer("✅ Разблокирован!")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ЗАЯВКИ НА ВЫВОД В АДМИНКЕ
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @dp.callback_query(F.data == "admin_withdraws")
 async def admin_withdraws_cb(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
@@ -1983,7 +2865,7 @@ async def admin_withdraws_cb(call: types.CallbackQuery):
         kb.button(text="🔙 Назад", callback_data="back_to_admin", icon_custom_emoji_id=CustomEmoji.BACK)
         try:
             await call.message.delete()
-        except:
+        except Exception:
             pass
         await call.message.answer(
             "💸 <b>Заявки на вывод</b>\n\n📭 Активных заявок нет.",
@@ -1992,21 +2874,18 @@ async def admin_withdraws_cb(call: types.CallbackQuery):
         )
         await call.answer()
         return
-
     text = f'💸 <b>Активные заявки на вывод ({len(requests)}):</b>\n\n'
     for rid, uid, uname, amount, status, created in requests:
         u = f"@{uname}" if uname else f"ID:{uid}"
         text += f"<b>#{rid}</b> | {u} | <b>{amount} USDT</b> | {created[:16]}\n"
-
     kb = InlineKeyboardBuilder()
     for rid, uid, uname, amount, status, created in requests:
         kb.button(text=f"#{rid} — {amount} USDT", callback_data=f"admin_withdraw_detail_{rid}")
     kb.button(text="🔙 Назад", callback_data="back_to_admin", icon_custom_emoji_id=CustomEmoji.BACK)
     kb.adjust(1)
-
     try:
         await call.message.delete()
-    except:
+    except Exception:
         pass
     await call.message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
     await call.answer()
@@ -2045,9 +2924,9 @@ async def admin_withdraw_detail_cb(call: types.CallbackQuery):
     await call.message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
     await call.answer()
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # РАССЫЛКА
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 
 BROADCAST_HELP = (
     "📢 <b>Рассылка</b>\n\n"
@@ -2104,27 +2983,87 @@ async def admin_broadcast_send(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     text = message.html_text
+    await state.update_data(broadcast_text=text)
+    await state.set_state(AdminState.broadcast_ask_button)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Добавить кнопку", callback_data="broadcast_add_button")
+    kb.button(text="➡️ Без кнопки", callback_data="broadcast_no_button")
+    kb.adjust(1)
+    await message.answer("Хотите добавить инлайн-кнопку к рассылке?", reply_markup=kb.as_markup())
+
+
+@dp.callback_query(F.data == "broadcast_add_button", AdminState.broadcast_ask_button)
+async def broadcast_add_button_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminState.broadcast_button_text)
+    await call.message.edit_text("Введите текст кнопки (например: Перейти в магазин):")
+    await call.answer()
+
+
+@dp.message(AdminState.broadcast_button_text)
+async def broadcast_button_text_msg(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    btn_text = message.text.strip()
+    if not btn_text:
+        await message.answer("❌ Текст кнопки не может быть пустым.")
+        return
+    await state.update_data(broadcast_button_text=btn_text)
+    await state.set_state(AdminState.broadcast_button_url)
+    await message.answer("Теперь введите ссылку для кнопки (например: https://t.me/EleghantNews):")
+
+
+@dp.message(AdminState.broadcast_button_url)
+async def broadcast_button_url_msg(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    url = message.text.strip()
+    if not (url.startswith("http://") or url.startswith("https://") or url.startswith("tg://")):
+        await message.answer("❌ Ссылка должна начинаться с http://, https:// или tg://")
+        return
+    await state.update_data(broadcast_button_url=url)
+    await _show_broadcast_preview(message, state)
+
+
+@dp.callback_query(F.data == "broadcast_no_button", AdminState.broadcast_ask_button)
+async def broadcast_no_button_cb(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(broadcast_button_text=None, broadcast_button_url=None)
+    await _show_broadcast_preview(call.message, state)
+    await call.answer()
+
+
+async def _show_broadcast_preview(message_obj: types.Message, state: FSMContext):
     data = await state.get_data()
+    text = data.get('broadcast_text', '')
     photo_id = data.get('broadcast_photo')
+    btn_text = data.get('broadcast_button_text')
+    btn_url = data.get('broadcast_button_url')
+
     preview_kb = InlineKeyboardBuilder()
+    if btn_text and btn_url:
+        preview_kb.button(text=btn_text, url=btn_url)
     preview_kb.button(text="✅ Отправить всем", callback_data="confirm_broadcast")
     preview_kb.button(text="❌ Отменить", callback_data="cancel_broadcast")
-    preview_kb.adjust(2)
-    await state.update_data(broadcast_text=text)
+    preview_kb.adjust(1, 2)
+
     preview_msg = "👁 <b>Предпросмотр рассылки:</b>\n\n"
     if photo_id:
-        await message.answer_photo(
+        await message_obj.answer_photo(
             photo=photo_id,
             caption=f"{preview_msg}{text}" if len(preview_msg + text) <= 1024 else text,
             parse_mode="HTML",
             reply_markup=preview_kb.as_markup()
         )
     else:
-        await message.answer(
+        await message_obj.answer(
             f"{preview_msg}{text}",
             parse_mode="HTML",
             reply_markup=preview_kb.as_markup()
         )
+    await state.set_state(None)
 
 @dp.callback_query(F.data == "confirm_broadcast")
 async def confirm_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
@@ -2133,6 +3072,15 @@ async def confirm_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     text = data.get('broadcast_text', '')
     photo_id = data.get('broadcast_photo')
+    btn_text = data.get('broadcast_button_text')
+    btn_url = data.get('broadcast_button_url')
+
+    send_kb = None
+    if btn_text and btn_url:
+        kb = InlineKeyboardBuilder()
+        kb.button(text=btn_text, url=btn_url)
+        send_kb = kb.as_markup()
+
     users = await fetchall("SELECT id FROM users WHERE accepted = 1")
     if not users:
         await call.message.edit_text("❌ Нет пользователей для рассылки.")
@@ -2144,9 +3092,9 @@ async def confirm_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
     for idx, (user_id,) in enumerate(users):
         try:
             if photo_id:
-                await bot.send_photo(user_id, photo=photo_id, caption=text, parse_mode="HTML")
+                await bot.send_photo(user_id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=send_kb)
             else:
-                await bot.send_message(user_id, text, parse_mode="HTML")
+                await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=send_kb)
             sent += 1
             if idx > 0 and idx % 100 == 0:
                 await status_msg.edit_text(f"📊 Прогресс: {idx}/{len(users)}\n✅ Отправлено: {sent}\n❌ Ошибок: {failed}")
@@ -2166,9 +3114,9 @@ async def cancel_broadcast_cb(call: types.CallbackQuery, state: FSMContext):
     await call.message.edit_text("❌ Рассылка отменена.")
     await call.answer()
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # ЗАГРУЗКА ТОВАРОВ ЧЕРЕЗ .TXT
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "admin_add_stock_txt")
 async def admin_add_stock_txt_start(call: types.CallbackQuery, state: FSMContext):
@@ -2195,7 +3143,7 @@ async def admin_add_stock_txt_cat(call: types.CallbackQuery, state: FSMContext):
         return
     try:
         cat_id = int(call.data.split("_")[2])
-    except:
+    except Exception:
         await call.answer("❌ Ошибка")
         return
     cat = await fetchone("SELECT id, name FROM categories WHERE id = ?", (cat_id,))
@@ -2270,9 +3218,9 @@ async def admin_add_stock_txt_file(message: types.Message, state: FSMContext):
         await status_msg.edit_text(f"❌ Ошибка при обработке файла: {e}")
     await state.clear()
 
-# ───────────────────────────────────────────────────────────────────────────────
-# ПРОМОКОДЫ
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# ПРОМОКОДЫ — СОЗДАНИЕ
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "admin_create_promo")
 async def admin_create_promo_start(call: types.CallbackQuery, state: FSMContext):
@@ -2339,7 +3287,7 @@ async def admin_create_promo_value(message: types.Message, state: FSMContext):
                 await message.answer("❌ Процент должен быть от 1 до 100.")
                 return
             value_text = f"{value}%"
-    except:
+    except Exception:
         await message.answer("❌ Введите корректное число.")
         return
     await state.update_data(promo_value=value)
@@ -2354,7 +3302,7 @@ async def admin_create_promo_limit(message: types.Message, state: FSMContext):
         limit = int(message.text)
         if limit <= 0:
             raise ValueError
-    except:
+    except Exception:
         await message.answer("❌ Введите положительное целое число.")
         return
     data = await state.get_data()
@@ -2377,9 +3325,9 @@ async def admin_create_promo_limit(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # ВЫДАЧА БАЛАНСА
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "admin_give_balance")
 async def admin_give_balance_start(call: types.CallbackQuery, state: FSMContext):
@@ -2395,7 +3343,7 @@ async def admin_give_balance_user(message: types.Message, state: FSMContext):
         return
     try:
         user_id = int(message.text)
-    except:
+    except Exception:
         await message.answer("❌ Введите число.")
         return
     user_exists = await fetchone("SELECT id FROM users WHERE id = ?", (user_id,))
@@ -2413,7 +3361,7 @@ async def admin_give_balance_amount(message: types.Message, state: FSMContext):
         return
     try:
         amount = round(float(message.text.replace(',', '.')), 2)
-    except:
+    except Exception:
         await message.answer("❌ Введите число.")
         return
     data = await state.get_data()
@@ -2422,9 +3370,9 @@ async def admin_give_balance_amount(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Баланс пользователя {user_id} изменён на {amount} USDT.")
     await state.clear()
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # ДОБАВЛЕНИЕ ТОВАРА (поштучно)
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "admin_add_stock")
 async def admin_add_stock_start(call: types.CallbackQuery, state: FSMContext):
@@ -2440,7 +3388,7 @@ async def admin_add_stock_cat(message: types.Message, state: FSMContext):
         return
     try:
         cat_id = int(message.text)
-    except:
+    except Exception:
         await message.answer("❌ Введите число.")
         return
     cat = await fetchone("SELECT id, name FROM categories WHERE id = ?", (cat_id,))
@@ -2464,15 +3412,12 @@ async def admin_add_stock_count(message: types.Message, state: FSMContext):
         if count < 1 or count > MAX_BULK_ADD:
             await message.answer(f"❌ Введите число от 1 до {MAX_BULK_ADD}.")
             return
-    except:
+    except Exception:
         await message.answer("❌ Введите число.")
         return
     await state.update_data(total_count=count, current_index=0, items=[])
     await state.set_state(AdminState.add_stock_data)
-    await message.answer(
-        f"📦 Товар #1 из {count}\n\nВведите данные товара:",
-        parse_mode="HTML"
-    )
+    await message.answer(f"📦 Товар #1 из {count}\n\nВведите данные товара:", parse_mode="HTML")
 
 @dp.message(AdminState.add_stock_data)
 async def admin_add_stock_data(message: types.Message, state: FSMContext):
@@ -2499,9 +3444,9 @@ async def admin_add_stock_data(message: types.Message, state: FSMContext):
         logger.info(f"Admin added {total_count} items to category {cat_id}")
         await state.clear()
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # ИЗМЕНЕНИЕ ЦЕНЫ
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "admin_change_price")
 async def admin_change_price_start(call: types.CallbackQuery, state: FSMContext):
@@ -2524,7 +3469,7 @@ async def admin_change_price_cat(call: types.CallbackQuery, state: FSMContext):
         return
     try:
         cat_id = int(call.data.split("_")[3])
-    except:
+    except Exception:
         await call.answer("❌ Ошибка")
         return
     await state.update_data(change_cat_id=cat_id)
@@ -2540,7 +3485,7 @@ async def admin_change_price_value(message: types.Message, state: FSMContext):
         new_price = float(message.text.replace(',', '.'))
         if new_price <= 0:
             raise ValueError
-    except:
+    except Exception:
         await message.answer("❌ Введите положительное число.")
         return
     data = await state.get_data()
@@ -2549,9 +3494,9 @@ async def admin_change_price_value(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Цена обновлена на {new_price} USDT.")
     await state.clear()
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # ПРЕДЗАКАЗЫ (АДМИН)
-# ───────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @dp.callback_query(F.data == "admin_preorders")
 async def admin_preorders_cb(call: types.CallbackQuery):
@@ -2599,7 +3544,7 @@ async def admin_preorders_cb(call: types.CallbackQuery):
     kb.adjust(1)
     try:
         await call.message.delete()
-    except:
+    except Exception:
         pass
     await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await call.answer()
@@ -2630,7 +3575,7 @@ async def admin_complete_preorders_cb(call: types.CallbackQuery):
     kb.button(text="🔙 Назад", callback_data="admin_preorders", icon_custom_emoji_id=CustomEmoji.BACK)
     try:
         await call.message.delete()
-    except:
+    except Exception:
         pass
     await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await call.answer()
@@ -2684,13 +3629,17 @@ async def cmd_complete_preorder(message: types.Message):
         await message.answer(f"⚠️ Выдан, но не удалось отправить сообщение: {e}")
     logger.info(f"Admin {message.from_user.id} completed preorder #{preorder_id} for user {user_id}")
 
-# --- КОМАНДЫ СТАТИСТИКИ ---
+# ═══════════════════════════════════════════════════════════════════════════════
+# СТАТИСТИКА
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @dp.message(Command("userstats"))
 async def show_user_stats(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
     try:
         total_users = await fetchone("SELECT COUNT(*) FROM users WHERE accepted = 1")
+        banned_users = await fetchone("SELECT COUNT(*) FROM users WHERE is_banned = 1")
         total_purchases = await fetchone("SELECT SUM(total) FROM users")
         total_balance = await fetchone("SELECT SUM(balance) FROM balances")
         total_preorders = await fetchone("SELECT COUNT(*) FROM preorders")
@@ -2698,16 +3647,21 @@ async def show_user_stats(message: types.Message):
         completed_preorders = await fetchone("SELECT COUNT(*) FROM preorders WHERE status = 'completed'")
         pending_withdraws = await fetchone("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'")
         total_withdrawn = await fetchone("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved'")
+        total_promos_used = await fetchone("SELECT COUNT(*) FROM promo_usage")
+        totp_count = await fetchone("SELECT COUNT(*) FROM totp_keys")
         text = (
             f'📊 <b>Статистика бота</b>\n\n'
             f"👥 Пользователей: {total_users[0] if total_users else 0}\n"
+            f"🚫 Заблокировано: {banned_users[0] if banned_users else 0}\n"
             f"🛒 Всего покупок: {total_purchases[0] if total_purchases else 0}\n"
             f"💰 Баланс пользователей: {total_balance[0] if total_balance else 0} USDT\n\n"
             f"🕞 Всего предзаказов: {total_preorders[0] if total_preorders else 0}\n"
             f"✅ Оплаченных: {paid_preorders[0] if paid_preorders else 0}\n"
             f"🎁 Выполненных: {completed_preorders[0] if completed_preorders else 0}\n\n"
+            f"🎫 Промокодов использовано: {total_promos_used[0] if total_promos_used else 0}\n"
             f"💸 Заявок на вывод (pending): {pending_withdraws[0] if pending_withdraws else 0}\n"
-            f"💸 Выведено всего: {total_withdrawn[0] if total_withdrawn and total_withdrawn[0] else 0} USDT"
+            f"💸 Выведено всего: {total_withdrawn[0] if total_withdrawn and total_withdrawn[0] else 0} USDT\n\n"
+            f"🔐 TOTP-ключей сохранено: {totp_count[0] if totp_count else 0}"
         )
         await message.answer(text, parse_mode="HTML")
     except Exception as e:
@@ -2727,7 +3681,7 @@ async def show_user_info(message: types.Message):
         await message.answer("❌ Введите число.")
         return
     try:
-        user_data = await fetchone("SELECT id, username, total, referrer_id FROM users WHERE id = ?", (target_user_id,))
+        user_data = await fetchone("SELECT id, username, total, referrer_id, is_banned, ban_reason FROM users WHERE id = ?", (target_user_id,))
         balance = await get_balance(target_user_id)
         preorders = await fetchall(
             "SELECT id, cat_id, quantity, total, status FROM preorders WHERE user_id = ? ORDER BY id DESC",
@@ -2748,10 +3702,23 @@ async def show_user_info(message: types.Message):
             )
         except Exception as e:
             tg_info = f"⚠️ Не удалось получить данные Telegram: {e}\n\n"
+
+        ban_status = ""
+        if user_data and user_data[4]:
+            ban_status = f"\n🚫 <b>ЗАБЛОКИРОВАН</b>\nПричина: {user_data[5] or 'не указана'}\n"
+
+        totp_keys = await fetchall("SELECT id, name FROM totp_keys WHERE user_id = ?", (target_user_id,))
+        totp_text = ""
+        if totp_keys:
+            totp_text = "\n🔐 <b>TOTP-ключи:</b>\n"
+            for kid, kname in totp_keys:
+                totp_text += f"   • {kname}\n"
+
         bot_info = (
             f"💰 Баланс: {balance} USDT\n"
             f"🛒 Покупок: {user_data[2] if user_data else 0}\n"
-            f"🔗 Реферер: {user_data[3] if user_data and user_data[3] else 'Нет'}\n\n"
+            f"🔗 Реферер: {user_data[3] if user_data and user_data[3] else 'Нет'}\n"
+            f"{ban_status}\n"
             f"🕞 <b>Предзаказы:</b>\n"
         )
         if preorders:
@@ -2767,6 +3734,7 @@ async def show_user_info(message: types.Message):
             for wid, wamount, wstatus, wcreated in withdraws:
                 emoji = {"pending": "⏳", "approved": "✅", "rejected": "❌"}.get(wstatus, "❓")
                 bot_info += f"   {emoji} #{wid} — {wamount} USDT ({wcreated[:10]})\n"
+        bot_info += totp_text
         await message.answer(f"<b>Информация о пользователе</b>\n\n{tg_info}{bot_info}", parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
@@ -2814,13 +3782,14 @@ async def back_to_profile_cb(call: types.CallbackQuery):
     await call.answer()
 
 @dp.callback_query(F.data == "back_to_admin")
-async def back_to_admin_cb(call: types.CallbackQuery):
+async def back_to_admin_cb(call: types.CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return
+    await state.clear()
     status_text = "🔴 Тех. работы ВКЛЮЧЕНЫ" if MAINTENANCE_MODE else "🟢 Бот работает в штатном режиме"
     try:
         await call.message.delete()
-    except:
+    except Exception:
         pass
     await call.message.answer(
         f"🔧 <b>Панель администратора</b>\n\nСтатус: {status_text}\n\nВыберите действие:",
@@ -2829,7 +3798,7 @@ async def back_to_admin_cb(call: types.CallbackQuery):
     )
     await call.answer()
 
-# --- ОБРАБОТЧИК ДЛЯ /addstock И /done (командная строка) ---
+# --- ДОБАВЛЕНИЕ ЧЕРЕЗ /addstock ---
 @dp.message(Command("addstock"))
 async def cmd_add_stock(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -2897,7 +3866,10 @@ async def handle_add_stock_items(message: types.Message):
     else:
         await message.answer(f"✅ Все {len(items)} товаров получены. Введите /done для сохранения.")
 
-# --- ЗАПУСК ---
+# ═══════════════════════════════════════════════════════════════════════════════
+# ЗАПУСК
+# ═══════════════════════════════════════════════════════════════════════════════
+
 async def main():
     logger.info("Starting bot...")
     try:
